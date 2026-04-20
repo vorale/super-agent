@@ -7,6 +7,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { widgetAuthService } from '../services/widget-auth.service.js';
 import { supportService } from '../services/support.service.js';
 import { chatService } from '../services/chat.service.js';
+import { supportWorkflowService } from '../services/support-workflow.service.js';
 import { prisma } from '../config/database.js';
 
 const WIDGET_USER_ID = '00000000-0000-0000-0000-000000000000'; // System user for widget sessions
@@ -156,7 +157,6 @@ export async function widgetRoutes(fastify: FastifyInstance): Promise<void> {
     // Get or create chat session for this support conversation
     let sessionId = conversation.session_id;
     if (!sessionId) {
-      // Need to find the organization's default support scope
       const scopes = await prisma.business_scopes.findMany({
         where: { organization_id: organizationId, deleted_at: null },
         take: 1,
@@ -174,8 +174,33 @@ export async function widgetRoutes(fastify: FastifyInstance): Promise<void> {
       await supportService.updateConversation(id, organizationId, { session_id: sessionId } as any);
     }
 
+    // Try the support workflow first
     try {
-      // Send to AI via chatService.processMessage
+      const scopeId = (await prisma.chat_sessions.findUnique({
+        where: { id: sessionId },
+        select: { business_scope_id: true },
+      }))?.business_scope_id;
+
+      const workflowExecutionId = await supportWorkflowService.executeForMessage({
+        organizationId,
+        businessScopeId: scopeId ?? undefined,
+        userId: WIDGET_USER_ID,
+        message,
+        sessionId,
+        conversationId: id,
+      });
+
+      // The workflow runs asynchronously via queue.
+      // For synchronous widget response, fall through to direct AI call
+      // and let the workflow handle background tasks (logging, analytics, etc.)
+      console.log(`[Widget] Workflow ${workflowExecutionId} started for conversation ${id}`);
+    } catch (workflowErr) {
+      // Workflow not available — fall through to direct AI call
+      console.warn('[Widget] Workflow execution failed, using direct AI:', workflowErr);
+    }
+
+    // Direct AI response for synchronous widget reply
+    try {
       const result = await chatService.processMessage({
         sessionId,
         businessScopeId: (await prisma.chat_sessions.findUnique({
@@ -197,7 +222,6 @@ export async function widgetRoutes(fastify: FastifyInstance): Promise<void> {
       const errorMessage = err instanceof Error ? err.message : 'AI service unavailable';
       console.error('[Widget] AI response failed:', errorMessage);
 
-      // Return error but don't crash — customer still gets a response
       return reply.status(503).send({
         error: 'AI service temporarily unavailable',
         reply: 'Sorry, I am currently unable to process your request. Please try again in a moment.',

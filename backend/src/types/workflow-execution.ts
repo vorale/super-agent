@@ -26,7 +26,15 @@ export type CanvasNodeType =
   | 'parallel'
   | 'end'
   | 'group'
-  | 'memo';
+  | 'memo'
+  | 'intentClassifier'
+  | 'faqLookup'
+  | 'channelReply'
+  | 'customerLookup'
+  | 'sentimentAnalyzer'
+  | 'skillRouter'
+  | 'slaTimer'
+  | 'csatSurvey';
 
 /**
  * Action execution status

@@ -23,6 +23,9 @@ import { ActionNodeExecutor } from './action-executor.js';
 import { HumanApprovalNodeExecutor } from './human-approval-executor.js';
 import { DocumentNodeExecutor } from './document-executor.js';
 import { CodeArtifactNodeExecutor } from './code-artifact-executor.js';
+import { IntentClassifierNodeExecutor } from './intent-classifier-executor.js';
+import { FaqLookupNodeExecutor } from './faq-lookup-executor.js';
+import { ChannelReplyNodeExecutor } from './channel-reply-executor.js';
 
 /**
  * Node Executor Registry
@@ -43,6 +46,9 @@ export class NodeExecutorRegistry {
     this.registerExecutor(new HumanApprovalNodeExecutor());
     this.registerExecutor(new DocumentNodeExecutor());
     this.registerExecutor(new CodeArtifactNodeExecutor());
+    this.registerExecutor(new IntentClassifierNodeExecutor());
+    this.registerExecutor(new FaqLookupNodeExecutor());
+    this.registerExecutor(new ChannelReplyNodeExecutor());
   }
 
   /**
