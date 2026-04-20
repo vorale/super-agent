@@ -2,7 +2,7 @@
 export * from './canvas'
 
 // Navigation Types
-export type NavigationPage = 'dashboard' | 'chat' | 'workflow' | 'agents' | 'projects' | 'tools' | 'apps' | 'starred'
+export type NavigationPage = 'dashboard' | 'chat' | 'workflow' | 'agents' | 'projects' | 'tools' | 'apps' | 'starred' | 'support'
 
 export interface NavItem {
   id: NavigationPage
@@ -301,4 +301,64 @@ export interface MenuItem {
   label: string
   path?: string
   action?: () => void
+}
+
+// Customer Service Types
+export type ConversationStatus = 'open' | 'pending_customer' | 'pending_agent' | 'resolved' | 'closed'
+export type ConversationPriority = 'low' | 'medium' | 'high' | 'urgent'
+export type SupportChannelType = 'web_widget' | 'slack' | 'dingtalk' | 'feishu' | 'wechat' | 'email' | 'phone'
+
+export interface SupportConversation {
+  id: string
+  organizationId: string
+  sessionId: string | null
+  channelType: SupportChannelType
+  channelId: string | null
+  status: ConversationStatus
+  priority: ConversationPriority
+  assignedAgentId: string | null
+  customerId: string | null
+  aiConfidence: number | null
+  sentimentScore: number | null
+  firstResponseAt: string | null
+  resolvedAt: string | null
+  resolutionNotes: string | null
+  tags: string[]
+  metadata: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CustomerProfile {
+  id: string
+  organizationId: string
+  externalId: string | null
+  name: string
+  email: string | null
+  phone: string | null
+  avatarUrl: string | null
+  sourceChannel: string | null
+  tags: string[]
+  customFields: Record<string, unknown>
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface FaqArticle {
+  id: string
+  organizationId: string
+  businessScopeId: string | null
+  question: string
+  answer: string
+  category: string | null
+  tags: string[]
+  viewCount: number
+  helpfulCount: number
+  notHelpfulCount: number
+  status: 'draft' | 'published' | 'archived'
+  sortOrder: number
+  createdBy: string | null
+  createdAt: string
+  updatedAt: string
 }

@@ -66,3 +66,25 @@ export {
   type SkillEntity,
   type AgentSkillEntity,
 } from './skill.repository.js';
+
+export {
+  SupportConversationRepository,
+  supportConversationRepository,
+  type SupportConversationEntity,
+  type ConversationStatus,
+  type ConversationPriority,
+  type ChannelType,
+} from './support.repository.js';
+
+export {
+  CustomerProfileRepository,
+  customerProfileRepository,
+  type CustomerProfileEntity,
+} from './customer-profile.repository.js';
+
+export {
+  FaqArticleRepository,
+  faqArticleRepository,
+  type FaqArticleEntity,
+  type FaqStatus,
+} from './faq.repository.js';

@@ -66,6 +66,9 @@ model organizations {
   data_connectors            data_connectors[]
   connector_audit_log        connector_audit_log[]
   connector_oauth_providers  connector_oauth_providers[]
+  support_conversations      support_conversations[]
+  customer_profiles          customer_profiles[]
+  faq_articles               faq_articles[]
 
   @@index([slug])
   @@index([plan_type])
@@ -151,6 +154,7 @@ model business_scopes {
   agent_scope_assignments   agent_scope_assignments[]
   rehearsal_sessions        rehearsal_sessions[]
   scope_evolution_proposals scope_evolution_proposals[]
+  faq_articles              faq_articles[]
 
   @@unique([organization_id, name], name: "unique_scope_name_per_org")
   @@index([organization_id])
@@ -459,10 +463,11 @@ model chat_sessions {
   updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz
 
   organization       organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade)
-  business_scope     business_scopes?     @relation(fields: [business_scope_id], references: [id], onDelete: SetNull)
-  chat_messages      chat_messages[]
-  im_thread_sessions im_thread_sessions[]
-  room_members       chat_room_members[]
+  business_scope        business_scopes?     @relation(fields: [business_scope_id], references: [id], onDelete: SetNull)
+  chat_messages         chat_messages[]
+  im_thread_sessions    im_thread_sessions[]
+  room_members          chat_room_members[]
+  support_conversations support_conversations[]
 
   @@index([organization_id])
   @@index([user_id])
@@ -1708,4 +1713,104 @@ model connector_oauth_providers {
 
   @@unique([organization_id, provider], name: "unique_oauth_provider_per_org")
   @@index([organization_id])
+}
+
+// ============================================================================
+// Support Conversations — Customer service conversation tracking
+// ============================================================================
+model support_conversations {
+  id                String    @id @default(uuid()) @db.Uuid
+  organization_id   String    @db.Uuid
+  session_id        String?   @db.Uuid
+  channel_type      String    @default("web_widget") @db.VarChar(20)
+  channel_id        String?   @db.VarChar(255)
+  status            String    @default("open") @db.VarChar(20)
+  priority          String    @default("medium") @db.VarChar(20)
+  assigned_agent_id String?   @db.Uuid
+  customer_id       String?   @db.Uuid
+  ai_confidence     Float?
+  sentiment_score   Float?
+  first_response_at DateTime? @db.Timestamptz
+  resolved_at       DateTime? @db.Timestamptz
+  resolution_notes  String?
+  tags              Json      @default("[]")
+  metadata          Json      @default("{}")
+  created_at        DateTime  @default(now()) @db.Timestamptz
+  updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  session      chat_sessions?       @relation(fields: [session_id], references: [id], onDelete: SetNull)
+  customer     customer_profiles?   @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+
+  @@index([organization_id])
+  @@index([session_id])
+  @@index([channel_type])
+  @@index([status])
+  @@index([priority])
+  @@index([assigned_agent_id])
+  @@index([customer_id])
+  @@index([created_at(sort: Desc)])
+  @@index([organization_id, status])
+  @@index([organization_id, channel_type])
+}
+
+// ============================================================================
+// Customer Profiles — External customer profiles
+// ============================================================================
+model customer_profiles {
+  id              String    @id @default(uuid()) @db.Uuid
+  organization_id String    @db.Uuid
+  external_id     String?   @db.VarChar(255)
+  name            String    @db.VarChar(255)
+  email           String?   @db.VarChar(255)
+  phone           String?   @db.VarChar(50)
+  avatar_url      String?
+  source_channel  String?   @db.VarChar(20)
+  tags            Json      @default("[]")
+  custom_fields   Json      @default("{}")
+  notes           String?
+  metadata        Json      @default("{}")
+  created_at      DateTime  @default(now()) @db.Timestamptz
+  updated_at      DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  organization           organizations           @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  support_conversations  support_conversations[]
+
+  @@unique([organization_id, external_id])
+  @@index([organization_id])
+  @@index([email])
+  @@index([source_channel])
+  @@index([created_at(sort: Desc)])
+}
+
+// ============================================================================
+// FAQ Articles — FAQ knowledge base articles
+// ============================================================================
+model faq_articles {
+  id                String    @id @default(uuid()) @db.Uuid
+  organization_id   String    @db.Uuid
+  business_scope_id String?   @db.Uuid
+  question          String
+  answer            String
+  category          String?   @db.VarChar(100)
+  tags              Json      @default("[]")
+  view_count        Int       @default(0)
+  helpful_count     Int       @default(0)
+  not_helpful_count Int       @default(0)
+  status            String    @default("published") @db.VarChar(20)
+  sort_order        Int       @default(0)
+  created_by        String?   @db.Uuid
+  created_at        DateTime  @default(now()) @db.Timestamptz
+  updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  organization   organizations   @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  business_scope business_scopes? @relation(fields: [business_scope_id], references: [id], onDelete: SetNull)
+
+  @@index([organization_id])
+  @@index([business_scope_id])
+  @@index([category])
+  @@index([status])
+  @@index([sort_order])
+  @@index([view_count(sort: Desc)])
+  @@index([organization_id, status])
 }

@@ -34,6 +34,10 @@ export const translations: TranslationData = {
     en: 'Showcase',
     cn: '企业Agent大赏'
   },
+  'nav.support': {
+    en: 'Support',
+    cn: '客服工作台'
+  },
   'nav.tasks': {
     en: 'Tasks',
     cn: '任务'
@@ -4307,5 +4311,55 @@ export const translations: TranslationData = {
   'tools.tryAdjusting': { en: 'Try adjusting the category, source, or search query', cn: '尝试调整分类、来源或搜索词' },
   'tools.skill': { en: 'Skill', cn: '技能' },
   'tools.mcp': { en: 'MCP', cn: 'MCP' },
-  'tools.plugin': { en: 'Plugin', cn: '插件' }
+  'tools.plugin': { en: 'Plugin', cn: '插件' },
+
+  // Support Workspace
+  'support.inbox': {
+    en: 'Inbox',
+    cn: '收件箱'
+  },
+  'support.allConversations': {
+    en: 'All',
+    cn: '全部'
+  },
+  'support.open': {
+    en: 'Open',
+    cn: '待处理'
+  },
+  'support.waitingAgent': {
+    en: 'Waiting Agent',
+    cn: '等待坐席'
+  },
+  'support.resolved': {
+    en: 'Resolved',
+    cn: '已解决'
+  },
+  'support.closed': {
+    en: 'Closed',
+    cn: '已关闭'
+  },
+  'support.assignToMe': {
+    en: 'Assign to Me',
+    cn: '分配给我'
+  },
+  'support.resolve': {
+    en: 'Resolve',
+    cn: '解决'
+  },
+  'support.customerInfo': {
+    en: 'Customer Info',
+    cn: '客户信息'
+  },
+  'support.noConversations': {
+    en: 'No conversations',
+    cn: '暂无会话'
+  },
+  'support.selectConversation': {
+    en: 'Select a conversation',
+    cn: '请选择一个会话'
+  },
+  'support.searchPlaceholder': {
+    en: 'Search conversations...',
+    cn: '搜索会话...'
+  },
 }

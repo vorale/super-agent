@@ -13,7 +13,10 @@ export type TenantModel =
   | 'chat_sessions'
   | 'chat_messages'
   | 'business_scopes'
-  | 'memberships';
+  | 'memberships'
+  | 'support_conversations'
+  | 'customer_profiles'
+  | 'faq_articles';
 
 /**
  * Base interface for entities with organization_id (multi-tenant entities).

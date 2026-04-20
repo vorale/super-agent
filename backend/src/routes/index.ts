@@ -68,6 +68,8 @@ import { tokenUsageRoutes } from './token-usage.routes.js';
 import { showcaseRoutes } from './showcase.routes.js';
 import { llmProxyRoutes } from './llm-proxy.routes.js';
 import { connectorRoutes } from './connectors.routes.js';
+import { widgetRoutes } from './widget.routes.js';
+import { supportRoutes } from './support.routes.js';
 
 /**
  * Register all API routes on the Fastify instance.
@@ -252,6 +254,16 @@ export async function registerRoutes(fastify: FastifyInstance): Promise<void> {
 
   // OpenAPI Routes for programmatic workflow access
   await fastify.register(openapiRoutes);
+
+  // ============================================================================
+  // Customer Service Routes
+  // ============================================================================
+
+  // Widget Routes (external, API Key authentication)
+  await fastify.register(widgetRoutes, { prefix: '/api/v1/widget' });
+
+  // Support Workspace Routes (internal, JWT authentication)
+  await fastify.register(supportRoutes, { prefix: '/api/support' });
 }
 
 // Re-export individual route modules for testing purposes
@@ -283,4 +295,6 @@ export {
   imChannelAdminRoutes,
   imWebhookRoutes,
   scopeMemoryRoutes,
+  widgetRoutes,
+  supportRoutes,
 };

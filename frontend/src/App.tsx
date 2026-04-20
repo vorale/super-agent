@@ -11,6 +11,7 @@ import { ChatRoomPage } from '@/pages/ChatRoomPage'
 import { DigitalTwinWizard } from '@/pages/DigitalTwinWizard'
 import { Projects } from '@/pages/Projects'
 import { ProjectBoard } from '@/pages/ProjectBoard'
+import { SupportWorkspace } from '@/pages/SupportWorkspace'
 import { AuthProvider } from '@/services/AuthContext'
 import { ThemeProvider } from '@/services/ThemeContext'
 import { useTranslation } from '@/i18n'
@@ -48,6 +49,7 @@ function AppContent() {
             <Route path="/config/framework" element={<InfrastructureConfigurator />} />
             <Route path="/apps" element={<Marketplace />} />
             <Route path="/apps/:id" element={<AppRunner />} />
+            <Route path="/support" element={<SupportWorkspace />} />
             <Route path="/starred" element={<StarredSessions />} />
             <Route path="/showcase" element={<ShowcasePage />} />
             <Route path="/settings" element={<Settings />} />
