@@ -216,7 +216,9 @@ export async function registerRoutes(fastify: FastifyInstance): Promise<void> {
   await fastify.register(scopeDocGroupRoutes, { prefix: '/api/business-scopes' });
 
   // Scope Briefings Routes (AI-generated insights)
-  await fastify.register(briefingRoutes);
+  if (process.env.ENABLE_BRIEFING !== 'false') {
+    await fastify.register(briefingRoutes);
+  }
 
   // Rehearsal & Evolution Proposal Routes (agent self-evolution)
   await fastify.register(rehearsalRoutes, { prefix: '/api/business-scopes' });

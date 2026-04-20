@@ -15,10 +15,13 @@
     "test:ui": "vitest --ui"
   },
   "dependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.60.2",
     "@supabase/supabase-js": "^2.90.1",
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.2.2",
     "@tailwindcss/typography": "^0.5.19",
     "@xyflow/react": "^12.6.1",
     "highlight.js": "^11.11.1",
+    "lightningcss-win32-x64-msvc": "^1.32.0",
     "lucide-react": "^0.562.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

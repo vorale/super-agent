@@ -4,7 +4,7 @@ import {
   ToggleLeft, ToggleRight, Save, ChevronDown, AlertTriangle
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
-import { apiClient } from '@/services/api'
+import { restClient } from '@/services/api'
 
 // =============================================================================
 // Types
@@ -229,7 +229,7 @@ function EscalationRulesTab() {
   const loadRules = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await apiClient.get('/support/escalation-rules')
+      const res = await restClient.get('/api/support/escalation-rules')
       setRules(res.data.rules || [])
     } catch (err) {
       console.error('Failed to load escalation rules:', err)
@@ -289,7 +289,7 @@ function EscalationRulesTab() {
     if (!formName.trim()) return
     setSaving(true)
     try {
-      const res = await apiClient.post('/support/escalation-rules', {
+      const res = await restClient.post('/api/support/escalation-rules', {
         name: formName,
         conditions: formConditions.map(({ id: _id, ...rest }) => rest),
         actions: formActions.map(({ id: _id, ...rest }) => rest),
@@ -308,7 +308,7 @@ function EscalationRulesTab() {
   const handleDelete = async (ruleId: string) => {
     if (!confirm('Delete this escalation rule?')) return
     try {
-      await apiClient.delete(`/support/escalation-rules/${ruleId}`)
+      await restClient.delete(`/api/support/escalation-rules/${ruleId}`)
       setRules((prev) => prev.filter((r) => r.id !== ruleId))
     } catch (err) {
       console.error('Failed to delete rule:', err)
@@ -317,7 +317,7 @@ function EscalationRulesTab() {
 
   const handleToggleActive = async (rule: EscalationRule) => {
     try {
-      await apiClient.put(`/support/escalation-rules/${rule.id}`, {
+      await restClient.put(`/api/support/escalation-rules/${rule.id}`, {
         active: !rule.active,
       })
       setRules((prev) =>
@@ -594,7 +594,7 @@ function TemplatesTab() {
   const loadTemplates = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await apiClient.get('/support/templates')
+      const res = await restClient.get('/api/support/templates')
       setTemplates(res.data.templates || [])
     } catch (err) {
       console.error('Failed to load templates:', err)
@@ -619,7 +619,7 @@ function TemplatesTab() {
     if (!formName.trim() || !formContent.trim()) return
     setSaving(true)
     try {
-      const res = await apiClient.post('/support/templates', {
+      const res = await restClient.post('/api/support/templates', {
         name: formName,
         content: formContent,
         category: formCategory,
@@ -637,7 +637,7 @@ function TemplatesTab() {
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this template?')) return
     try {
-      await apiClient.delete(`/support/templates/${id}`)
+      await restClient.delete(`/api/support/templates/${id}`)
       setTemplates((prev) => prev.filter((t) => t.id !== id))
     } catch (err) {
       console.error('Failed to delete template:', err)
@@ -813,7 +813,7 @@ function BusinessHoursTab() {
   const loadHours = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await apiClient.get('/support/business-hours')
+      const res = await restClient.get('/api/support/business-hours')
       const data: BusinessHours = res.data.business_hours || res.data
       setTimezone(data.timezone || 'UTC')
       setSchedule(data.schedule && Object.keys(data.schedule).length > 0 ? data.schedule : defaultSchedule)
@@ -852,7 +852,7 @@ function BusinessHoursTab() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await apiClient.post('/support/business-hours', {
+      await restClient.post('/api/support/business-hours', {
         timezone,
         schedule,
         holidays,
@@ -1009,8 +1009,8 @@ function CsatTab() {
     setLoading(true)
     try {
       const [statsRes, surveysRes] = await Promise.all([
-        apiClient.get('/support/surveys/stats'),
-        apiClient.get('/support/surveys'),
+        restClient.get('/api/support/surveys/stats'),
+        restClient.get('/api/support/surveys'),
       ])
       setStats(statsRes.data.stats || statsRes.data)
       setSurveys(surveysRes.data.surveys || [])

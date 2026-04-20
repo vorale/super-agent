@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { useAuth } from '@/services/AuthContext'
-import { apiClient } from '@/services/api'
+import { restClient } from '@/services/api'
 
 type ConversationStatus = 'open' | 'pending_customer' | 'pending_agent' | 'resolved' | 'closed'
 type ConversationPriority = 'low' | 'medium' | 'high' | 'urgent'
@@ -149,7 +149,7 @@ export function SupportWorkspace() {
       const params: Record<string, string> = {}
       if (filterStatus !== 'all') params.status = filterStatus
       const query = new URLSearchParams(params).toString()
-      const res = await apiClient.get(`/support/conversations${query ? `?${query}` : ''}`)
+      const res = await restClient.get(`/api/support/conversations${query ? `?${query}` : ''}`)
       setConversations(res.data.conversations || [])
     } catch (err) {
       console.error('Failed to load conversations:', err)
@@ -173,7 +173,7 @@ export function SupportWorkspace() {
     if (!selectedConversation || selectedConversation.status !== 'open') return
     const interval = setInterval(async () => {
       try {
-        const res = await apiClient.get(`/support/conversations/${selectedConversation.id}`)
+        const res = await restClient.get(`/api/support/conversations/${selectedConversation.id}`)
         setMessages(res.data.messages || [])
       } catch { /* silent */ }
     }, 10000)
@@ -188,7 +188,7 @@ export function SupportWorkspace() {
     setShowActions(null)
 
     try {
-      const res = await apiClient.get(`/support/conversations/${conv.id}`)
+      const res = await restClient.get(`/api/support/conversations/${conv.id}`)
       setMessages(res.data.messages || [])
     } catch (err) {
       console.error('Failed to load messages:', err)
@@ -198,7 +198,7 @@ export function SupportWorkspace() {
 
     if (conv.customer_id) {
       try {
-        const res = await apiClient.get(`/support/customers/${conv.customer_id}`)
+        const res = await restClient.get(`/api/support/customers/${conv.customer_id}`)
         setCustomerProfile(res.data.customer)
       } catch {
         setCustomerProfile(null)
@@ -210,7 +210,7 @@ export function SupportWorkspace() {
 
   useEffect(() => {
     if (selectedConversation?.customer_id) {
-      apiClient.get(`/support/customers/${selectedConversation.customer_id}`)
+      restClient.get(`/api/support/customers/${selectedConversation.customer_id}`)
         .then(res => setCustomerProfile(res.data.customer))
         .catch(() => setCustomerProfile(null))
     } else {
@@ -244,9 +244,9 @@ export function SupportWorkspace() {
     setIsSending(true)
     setMessageInput('')
     try {
-      await apiClient.post(`/support/conversations/${selectedConversation.id}/messages`, { message: text })
+      await restClient.post(`/api/support/conversations/${selectedConversation.id}/messages`, { message: text })
       // Reload messages
-      const res = await apiClient.get(`/support/conversations/${selectedConversation.id}`)
+      const res = await restClient.get(`/api/support/conversations/${selectedConversation.id}`)
       setMessages(res.data.messages || [])
     } catch (err) {
       console.error('Failed to send message:', err)
@@ -259,7 +259,7 @@ export function SupportWorkspace() {
   const handleAssignToMe = async () => {
     if (!selectedConversation || !user?.id) return
     try {
-      await apiClient.put(`/support/conversations/${selectedConversation.id}/assign`, { agentId: user.id })
+      await restClient.put(`/api/support/conversations/${selectedConversation.id}/assign`, { agentId: user.id })
       const updated = { ...selectedConversation, assigned_agent_id: user.id }
       setSelectedConversation(updated)
       setConversations(prev => prev.map(c => c.id === updated.id ? updated : c))
@@ -271,7 +271,7 @@ export function SupportWorkspace() {
   const handleResolve = async () => {
     if (!selectedConversation) return
     try {
-      await apiClient.put(`/support/conversations/${selectedConversation.id}/resolve`, {})
+      await restClient.put(`/api/support/conversations/${selectedConversation.id}/resolve`, {})
       const updated = { ...selectedConversation, status: 'resolved' as ConversationStatus }
       setSelectedConversation(updated)
       setConversations(prev => prev.map(c => c.id === updated.id ? updated : c))
@@ -283,7 +283,7 @@ export function SupportWorkspace() {
   const handleClose = async () => {
     if (!selectedConversation) return
     try {
-      await apiClient.put(`/support/conversations/${selectedConversation.id}/close`, {})
+      await restClient.put(`/api/support/conversations/${selectedConversation.id}/close`, {})
       const updated = { ...selectedConversation, status: 'closed' as ConversationStatus }
       setSelectedConversation(updated)
       setConversations(prev => prev.map(c => c.id === updated.id ? updated : c))
@@ -295,7 +295,7 @@ export function SupportWorkspace() {
   const handleHandoff = async () => {
     if (!selectedConversation) return
     try {
-      await apiClient.post(`/support/conversations/${selectedConversation.id}/handoff`, {})
+      await restClient.post(`/api/support/conversations/${selectedConversation.id}/handoff`, {})
       const updated = { ...selectedConversation, status: 'pending_agent' as ConversationStatus }
       setSelectedConversation(updated)
       setConversations(prev => prev.map(c => c.id === updated.id ? updated : c))

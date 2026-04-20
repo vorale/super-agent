@@ -4,7 +4,7 @@ import {
   TrendingUp, BarChart3
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
-import { apiClient } from '@/services/api'
+import { restClient } from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Types

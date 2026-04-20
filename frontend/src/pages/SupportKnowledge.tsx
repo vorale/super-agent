@@ -6,7 +6,7 @@ import {
   MessageSquare
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
-import { apiClient } from '@/services/api'
+import { restClient } from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -120,7 +120,7 @@ function DraftsTab() {
   const loadDrafts = useCallback(async () => {
     setIsLoading(true)
     try {
-      const res = await apiClient.get('/api/support/knowledge/drafts')
+      const res = await restClient.get('/api/support/knowledge/drafts')
       setDrafts(res.data.drafts || [])
     } catch (err) {
       console.error('Failed to load drafts:', err)
@@ -165,7 +165,7 @@ function DraftsTab() {
   const handlePublish = async (draftId: string) => {
     setActionLoading(prev => ({ ...prev, [draftId]: 'publish' }))
     try {
-      await apiClient.post(`/api/support/knowledge/drafts/${draftId}/publish`, {})
+      await restClient.post(`/api/support/knowledge/drafts/${draftId}/publish`, {})
       setDrafts(prev => prev.filter(d => d.id !== draftId))
       showToast('FAQ published successfully')
     } catch (err) {
@@ -179,7 +179,7 @@ function DraftsTab() {
   const handleReject = async (draftId: string) => {
     setActionLoading(prev => ({ ...prev, [draftId]: 'reject' }))
     try {
-      await apiClient.delete(`/api/support/knowledge/drafts/${draftId}`)
+      await restClient.delete(`/api/support/knowledge/drafts/${draftId}`)
       setDrafts(prev => prev.filter(d => d.id !== draftId))
       showToast('Draft rejected')
     } catch (err) {
@@ -193,7 +193,7 @@ function DraftsTab() {
   const handleDistillAll = async () => {
     setIsDistillingAll(true)
     try {
-      const res = await apiClient.post('/api/support/knowledge/distill-all', {})
+      const res = await restClient.post('/api/support/knowledge/distill-all', {})
       const count = res.data?.count ?? res.data?.drafts?.length ?? 0
       showToast(`Distilled ${count} new FAQ draft${count !== 1 ? 's' : ''}`)
       loadDrafts()
@@ -210,7 +210,7 @@ function DraftsTab() {
     if (!id) return
     setIsDistilling(true)
     try {
-      await apiClient.post('/api/support/knowledge/distill', { conversationId: id })
+      await restClient.post('/api/support/knowledge/distill', { conversationId: id })
       showToast('Conversation distilled into draft')
       setDistillId('')
       loadDrafts()
@@ -443,7 +443,7 @@ function GapReportTab() {
   const loadReport = useCallback(async () => {
     setIsLoading(true)
     try {
-      const res = await apiClient.get(`/api/support/knowledge/gap-report?days=${period}`)
+      const res = await restClient.get(`/api/support/knowledge/gap-report?days=${period}`)
       setReport(res.data)
     } catch (err) {
       console.error('Failed to load gap report:', err)
@@ -574,14 +574,14 @@ function AutoLearnTab() {
   const [gapSummary, setGapSummary] = useState<string | null>(null)
 
   useEffect(() => {
-    apiClient.get('/api/support/knowledge/drafts')
+    restClient.get('/api/support/knowledge/drafts')
       .then((res) => {
         const drafts = res.data.drafts || []
         setDraftCount(drafts.length)
       })
       .catch(() => { /* silent */ })
 
-    apiClient.get('/api/support/knowledge/gap-report?days=7')
+    restClient.get('/api/support/knowledge/gap-report?days=7')
       .then((res) => {
         setGapSummary(res.data?.summary || null)
       })
