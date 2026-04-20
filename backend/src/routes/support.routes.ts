@@ -6,6 +6,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { authenticate, requireModifyAccess } from '../middleware/auth.js';
 import { supportService } from '../services/support.service.js';
+import { chatService } from '../services/chat.service.js';
 import {
   faqArticleRepository,
   type FaqStatus,
@@ -89,7 +90,7 @@ export async function supportRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({ conversations });
   });
 
-  // GET /api/support/conversations/:id — Get conversation detail
+  // GET /api/support/conversations/:id — Get conversation detail with messages
   fastify.get('/conversations/:id', {
     preHandler: [authenticate],
   }, async (request: FastifyRequest<ConversationParamRequest>, reply: FastifyReply) => {
@@ -100,7 +101,69 @@ export async function supportRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: 'Conversation not found' });
     }
 
-    return reply.send({ conversation });
+    // Load chat message history if session exists
+    let messages: any[] = [];
+    if (conversation.session_id) {
+      try {
+        const history = await chatService.getChatHistory(organizationId, {
+          sessionId: conversation.session_id,
+        });
+        messages = history.map((msg) => ({
+          id: msg.id,
+          type: msg.type,
+          content: msg.content,
+          agentId: msg.agent_id,
+          createdAt: msg.created_at,
+          metadata: msg.metadata,
+        }));
+      } catch {
+        // Chat session may not exist yet — that's ok
+      }
+    }
+
+    return reply.send({ conversation, messages });
+  });
+
+  // POST /api/support/conversations/:id/messages — Agent sends a reply
+  fastify.post('/conversations/:id/messages', {
+    preHandler: [authenticate, requireModifyAccess],
+  }, async (request: FastifyRequest<ConversationParamRequest & { Body: { message: string } }>, reply: FastifyReply) => {
+    const { organizationId, id: userId } = (request as any).user;
+    const { message } = request.body;
+
+    if (!message?.trim()) {
+      return reply.status(400).send({ error: 'Message cannot be empty' });
+    }
+
+    const conversation = await supportService.getConversation(request.params.id, organizationId);
+    if (!conversation) {
+      return reply.status(404).send({ error: 'Conversation not found' });
+    }
+
+    // If there's a chat session, add the agent message to it
+    if (conversation.session_id) {
+      try {
+        await chatService.addMessage(
+          organizationId,
+          conversation.session_id,
+          'agent',
+          message,
+          { agentId: userId },
+        );
+      } catch {
+        // Session might not exist
+      }
+    }
+
+    // Update conversation status back to open if it was pending_agent
+    if (conversation.status === 'pending_agent') {
+      await supportService.updateConversation(request.params.id, organizationId, {
+        status: 'open',
+        assigned_agent_id: userId,
+      } as any);
+    }
+
+    return reply.send({ success: true });
   });
 
   // PUT /api/support/conversations/:id/assign — Assign agent

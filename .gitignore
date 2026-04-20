@@ -14,3 +14,5 @@ infra/cdk.context.json
 frontend/.env.production
 **/cdk.out/
 **/cdk.context.json
+packages/
+.claude/

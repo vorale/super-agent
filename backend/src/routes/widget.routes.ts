@@ -7,6 +7,9 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { widgetAuthService } from '../services/widget-auth.service.js';
 import { supportService } from '../services/support.service.js';
 import { chatService } from '../services/chat.service.js';
+import { prisma } from '../config/database.js';
+
+const WIDGET_USER_ID = '00000000-0000-0000-0000-000000000000'; // System user for widget sessions
 
 interface WidgetAuthRequest {
   Headers: { authorization?: string };
@@ -75,8 +78,32 @@ export async function widgetRoutes(fastify: FastifyInstance): Promise<void> {
       customerId,
     });
 
+    // Create a chat session linked to this support conversation
+    let chatSession;
+    if (body.scopeId) {
+      chatSession = await chatService.createSession(
+        { business_scope_id: body.scopeId },
+        organizationId,
+        WIDGET_USER_ID,
+      );
+    } else {
+      chatSession = await chatService.createSession(
+        {},
+        organizationId,
+        WIDGET_USER_ID,
+      );
+    }
+
+    // Link chat session to support conversation
+    await supportService.updateConversation(
+      conversation.id,
+      organizationId,
+      { session_id: chatSession.id } as any,
+    );
+
     return reply.status(201).send({
       conversationId: conversation.id,
+      sessionId: chatSession.id,
       customerId,
       status: conversation.status,
     });
@@ -111,7 +138,7 @@ export async function widgetRoutes(fastify: FastifyInstance): Promise<void> {
     });
   });
 
-  // POST /api/v1/widget/sessions/:id/messages — Send a message
+  // POST /api/v1/widget/sessions/:id/messages — Send a message and get AI response
   fastify.post('/sessions/:id/messages', async (request: FastifyRequest<WidgetMessageRequest>, reply: FastifyReply) => {
     const { organizationId } = await authenticateWidget(request, reply);
     const { id } = request.params as { id: string };
@@ -126,13 +153,57 @@ export async function widgetRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(404).send({ error: 'Conversation not found' });
     }
 
-    // TODO: Integrate with chatService for AI response
-    // For now, just acknowledge the message
-    return reply.send({
-      acknowledged: true,
-      conversationId: id,
-      status: conversation.status,
-    });
+    // Get or create chat session for this support conversation
+    let sessionId = conversation.session_id;
+    if (!sessionId) {
+      // Need to find the organization's default support scope
+      const scopes = await prisma.business_scopes.findMany({
+        where: { organization_id: organizationId, deleted_at: null },
+        take: 1,
+      });
+      const scopeId = scopes[0]?.id;
+      if (!scopeId) {
+        return reply.status(400).send({ error: 'No business scope configured for customer service' });
+      }
+      const chatSession = await chatService.createSession(
+        { business_scope_id: scopeId },
+        organizationId,
+        WIDGET_USER_ID,
+      );
+      sessionId = chatSession.id;
+      await supportService.updateConversation(id, organizationId, { session_id: sessionId } as any);
+    }
+
+    try {
+      // Send to AI via chatService.processMessage
+      const result = await chatService.processMessage({
+        sessionId,
+        businessScopeId: (await prisma.chat_sessions.findUnique({
+          where: { id: sessionId },
+          select: { business_scope_id: true },
+        }))?.business_scope_id ?? undefined,
+        message,
+        organizationId,
+        userId: WIDGET_USER_ID,
+      });
+
+      return reply.send({
+        reply: result.text,
+        sessionId: result.sessionId,
+        conversationId: id,
+        status: conversation.status,
+      });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'AI service unavailable';
+      console.error('[Widget] AI response failed:', errorMessage);
+
+      // Return error but don't crash — customer still gets a response
+      return reply.status(503).send({
+        error: 'AI service temporarily unavailable',
+        reply: 'Sorry, I am currently unable to process your request. Please try again in a moment.',
+        conversationId: id,
+      });
+    }
   });
 
   // GET /api/v1/widget/faq/search — Search FAQ
