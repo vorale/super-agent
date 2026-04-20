@@ -71,6 +71,7 @@ import { connectorRoutes } from './connectors.routes.js';
 import { widgetRoutes } from './widget.routes.js';
 import { supportRoutes } from './support.routes.js';
 import { supportSettingsRoutes } from './support-settings.routes.js';
+import { supportKnowledgeRoutes } from './support-knowledge.routes.js';
 
 /**
  * Register all API routes on the Fastify instance.
@@ -268,6 +269,9 @@ export async function registerRoutes(fastify: FastifyInstance): Promise<void> {
 
   // Support Settings Routes (escalation rules, templates, business hours, surveys, metrics)
   await fastify.register(supportSettingsRoutes, { prefix: '/api/support' });
+
+  // Support Knowledge Routes (self-learning, FAQ drafts, gap detection)
+  await fastify.register(supportKnowledgeRoutes, { prefix: '/api/support' });
 }
 
 // Re-export individual route modules for testing purposes
@@ -302,4 +306,5 @@ export {
   widgetRoutes,
   supportRoutes,
   supportSettingsRoutes,
+  supportKnowledgeRoutes,
 };

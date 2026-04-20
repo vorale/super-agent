@@ -14,6 +14,7 @@ import { ProjectBoard } from '@/pages/ProjectBoard'
 import { SupportWorkspace } from '@/pages/SupportWorkspace'
 import { SupportSettings } from '@/pages/SupportSettings'
 import { SupportAnalytics } from '@/pages/SupportAnalytics'
+import { SupportKnowledge } from '@/pages/SupportKnowledge'
 import { AuthProvider } from '@/services/AuthContext'
 import { ThemeProvider } from '@/services/ThemeContext'
 import { useTranslation } from '@/i18n'
@@ -54,6 +55,7 @@ function AppContent() {
             <Route path="/support" element={<SupportWorkspace />} />
             <Route path="/support/settings" element={<SupportSettings />} />
             <Route path="/support/analytics" element={<SupportAnalytics />} />
+            <Route path="/support/knowledge" element={<SupportKnowledge />} />
             <Route path="/starred" element={<StarredSessions />} />
             <Route path="/showcase" element={<ShowcasePage />} />
             <Route path="/settings" element={<Settings />} />

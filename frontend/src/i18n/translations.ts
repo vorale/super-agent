@@ -4386,4 +4386,20 @@ export const translations: TranslationData = {
     en: 'CSAT Surveys',
     cn: '满意度调查'
   },
+  'support.knowledge': {
+    en: 'Knowledge',
+    cn: '知识中心'
+  },
+  'support.faqDrafts': {
+    en: 'FAQ Drafts',
+    cn: 'FAQ 草稿'
+  },
+  'support.gapReport': {
+    en: 'Gap Report',
+    cn: '知识缺口'
+  },
+  'support.autoLearning': {
+    en: 'Auto-Learning',
+    cn: '自动学习'
+  },
 }
