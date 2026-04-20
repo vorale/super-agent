@@ -4362,4 +4362,28 @@ export const translations: TranslationData = {
     en: 'Search conversations...',
     cn: '搜索会话...'
   },
+  'support.settings': {
+    en: 'Settings',
+    cn: '设置'
+  },
+  'support.analytics': {
+    en: 'Analytics',
+    cn: '数据分析'
+  },
+  'support.escalationRules': {
+    en: 'Escalation Rules',
+    cn: '升级规则'
+  },
+  'support.responseTemplates': {
+    en: 'Response Templates',
+    cn: '回复模板'
+  },
+  'support.businessHours': {
+    en: 'Business Hours',
+    cn: '营业时间'
+  },
+  'support.csatSettings': {
+    en: 'CSAT Surveys',
+    cn: '满意度调查'
+  },
 }

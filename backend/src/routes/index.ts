@@ -70,6 +70,7 @@ import { llmProxyRoutes } from './llm-proxy.routes.js';
 import { connectorRoutes } from './connectors.routes.js';
 import { widgetRoutes } from './widget.routes.js';
 import { supportRoutes } from './support.routes.js';
+import { supportSettingsRoutes } from './support-settings.routes.js';
 
 /**
  * Register all API routes on the Fastify instance.
@@ -264,6 +265,9 @@ export async function registerRoutes(fastify: FastifyInstance): Promise<void> {
 
   // Support Workspace Routes (internal, JWT authentication)
   await fastify.register(supportRoutes, { prefix: '/api/support' });
+
+  // Support Settings Routes (escalation rules, templates, business hours, surveys, metrics)
+  await fastify.register(supportSettingsRoutes, { prefix: '/api/support' });
 }
 
 // Re-export individual route modules for testing purposes
@@ -297,4 +301,5 @@ export {
   scopeMemoryRoutes,
   widgetRoutes,
   supportRoutes,
+  supportSettingsRoutes,
 };
