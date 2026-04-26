@@ -94,6 +94,7 @@ class SessionStreamManager {
       businessScopeId: string
       agentId?: string
       mentionAgentId?: string
+      model?: string
       sopContext: string
     }
   ): void {
@@ -120,6 +121,7 @@ class SessionStreamManager {
     this.notify()
 
     const allBlocks: ContentBlock[] = []
+    let lastModel: string | undefined
 
     const handle = streamChat(
       {
@@ -128,13 +130,28 @@ class SessionStreamManager {
         mentionAgentId: options.mentionAgentId,
         message: content.trim(),
         sessionId,
+        model: options.model,
         context: { sop_context: options.sopContext },
       },
       {
         onAssistant: (event) => {
           allBlocks.push(...event.content)
+          if (event.model) lastModel = event.model
           const serialized = JSON.stringify(allBlocks)
           this.updateMessage(sessionId, aiMessageId, serialized, event.speakerAgentName, event.speakerAgentAvatar)
+        },
+        onResult: (event) => {
+          // result event = AI response complete. Stop loading immediately
+          // instead of waiting for [DONE] (which can be delayed by container cleanup).
+          const s = this.sessions.get(sessionId)
+          if (s) {
+            s.isSending = false
+            const model = lastModel || event.model
+            s.messages = s.messages.map(m =>
+              m.id === aiMessageId ? { ...m, model, tokenUsage: event.token_usage } : m
+            )
+            this.notify()
+          }
         },
         onError: (event) => {
           const s = this.sessions.get(sessionId)
@@ -158,6 +175,7 @@ class SessionStreamManager {
           const s = this.sessions.get(sessionId)
           if (s) {
             s.streamHandle = null
+            // isSending may already be false (set by onResult). This is a fallback.
             s.isSending = false
             if (allBlocks.length === 0) {
               this.updateMessage(sessionId, aiMessageId, 'No response received')

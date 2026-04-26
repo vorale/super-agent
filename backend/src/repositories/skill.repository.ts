@@ -12,6 +12,8 @@ export interface SkillEntity {
   id: string;
   organization_id: string;
   business_scope_id: string | null;
+  parent_skill_id: string | null;
+  owner_scope_id: string | null;
   name: string;
   display_name: string;
   description: string | null;
@@ -274,6 +276,36 @@ export class SkillRepository {
       },
       orderBy: { name: 'asc' },
     }) as Promise<SkillEntity[]>;
+  }
+
+  /**
+   * Find an existing fork of a skill for a specific scope.
+   */
+  async findScopeFork(organizationId: string, parentSkillId: string, ownerScopeId: string): Promise<SkillEntity | null> {
+    return prisma.skills.findFirst({
+      where: {
+        organization_id: organizationId,
+        parent_skill_id: parentSkillId,
+        owner_scope_id: ownerScopeId,
+        status: 'active',
+      },
+    }) as Promise<SkillEntity | null>;
+  }
+
+  /**
+   * Get skills assigned to an agent, preferring scope-owned forks when available.
+   * For each skill, checks if a fork exists for the given scope and returns the fork instead.
+   */
+  async findByAgentIdWithScopeForks(organizationId: string, agentId: string, scopeId: string): Promise<SkillEntity[]> {
+    const baseSkills = await this.findByAgentId(organizationId, agentId);
+    if (!scopeId) return baseSkills;
+
+    const result: SkillEntity[] = [];
+    for (const skill of baseSkills) {
+      const fork = await this.findScopeFork(organizationId, skill.id, scopeId);
+      result.push(fork || skill);
+    }
+    return result;
   }
 
   /**

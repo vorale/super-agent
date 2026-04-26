@@ -981,6 +981,12 @@ export async function workflowRoutes(fastify: FastifyInstance): Promise<void> {
           if (clientDisconnected) break;
           reply.raw.write(formatSSEEvent({ data: JSON.stringify(event) }));
         }
+
+        // If client disconnected mid-execution, force-return the generator
+        // to release resources (AgentCore session, workspace locks, etc.)
+        if (clientDisconnected) {
+          generator.return(undefined as any).catch(() => {});
+        }
       } catch (error) {
         if (!clientDisconnected) {
           reply.raw.write(formatSSEEvent({

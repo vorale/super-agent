@@ -66,6 +66,15 @@ model organizations {
   data_connectors            data_connectors[]
   connector_audit_log        connector_audit_log[]
   connector_oauth_providers  connector_oauth_providers[]
+  support_conversations      support_conversations[]
+  customer_profiles          customer_profiles[]
+  faq_articles               faq_articles[]
+  agent_groups               agent_groups[]
+  escalation_rules           escalation_rules[]
+  csat_surveys               csat_surveys[]
+  support_metrics_daily      support_metrics_daily[]
+  response_templates         response_templates[]
+  business_hours             business_hours[]
 
   @@index([slug])
   @@index([plan_type])
@@ -130,6 +139,7 @@ model business_scopes {
   avatar          String? // photo for digital twins
   role            String? // role/title for digital twins
   system_prompt   String? // system prompt for digital twins
+  settings        Json?   @db.JsonB // scope-level settings (e.g. { modelId: "..." })
   created_at      DateTime  @default(now()) @db.Timestamptz
   updated_at      DateTime  @default(now()) @updatedAt @db.Timestamptz
   deleted_at      DateTime? @db.Timestamptz
@@ -151,6 +161,7 @@ model business_scopes {
   agent_scope_assignments   agent_scope_assignments[]
   rehearsal_sessions        rehearsal_sessions[]
   scope_evolution_proposals scope_evolution_proposals[]
+  room_member_scopes        chat_room_members[]          @relation("room_member_scope")
 
   @@unique([organization_id, name], name: "unique_scope_name_per_org")
   @@index([organization_id])
@@ -229,6 +240,8 @@ model skills {
   id                String   @id @default(uuid()) @db.Uuid
   organization_id   String   @db.Uuid
   business_scope_id String?  @db.Uuid
+  parent_skill_id   String?  @db.Uuid
+  owner_scope_id    String?  @db.Uuid
   name              String
   display_name      String
   description       String?
@@ -245,6 +258,8 @@ model skills {
   updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz
 
   organization       organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  parent_skill       skills?              @relation("SkillFork", fields: [parent_skill_id], references: [id], onDelete: SetNull)
+  forked_copies      skills[]             @relation("SkillFork")
   agent_skills       agent_skills[]
   skill_marketplace  skill_marketplace[]
   skill_group_access skill_group_access[]
@@ -253,6 +268,8 @@ model skills {
   @@unique([organization_id, name], name: "unique_skill_name_per_org")
   @@index([organization_id])
   @@index([business_scope_id])
+  @@index([parent_skill_id])
+  @@index([owner_scope_id])
   @@index([hash_id])
   @@index([name])
   @@index([status])
@@ -447,6 +464,7 @@ model chat_sessions {
   claude_session_id String?
   title             String?
   status            String    @default("idle") // idle | generating | error
+  source            String    @default("web") @db.VarChar(20) // web | im
   sop_context       String?
   context           Json      @default("{}")
   room_mode         String    @default("single") @db.VarChar(20) // single | group
@@ -458,16 +476,18 @@ model chat_sessions {
   created_at        DateTime  @default(now()) @db.Timestamptz
   updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz
 
-  organization       organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade)
-  business_scope     business_scopes?     @relation(fields: [business_scope_id], references: [id], onDelete: SetNull)
+  organization       organizations          @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  business_scope     business_scopes?       @relation(fields: [business_scope_id], references: [id], onDelete: SetNull)
   chat_messages      chat_messages[]
   im_thread_sessions im_thread_sessions[]
   room_members       chat_room_members[]
+  sticky_bindings    im_channel_bindings[]  @relation("StickySession")
 
   @@index([organization_id])
   @@index([user_id])
   @@index([business_scope_id])
   @@index([room_mode])
+  @@index([source])
   @@index([created_at(sort: Desc)])
   @@index([organization_id, user_id])
   @@index([organization_id, business_scope_id])
@@ -516,6 +536,9 @@ model workflow_executions {
   paused_at_node  String?
   current_segment Int       @default(0)
   segment_plan    Json      @default("[]")
+  workspace_session_id String?   @db.VarChar(255)
+  workspace_scope_id   String?   @db.Uuid
+  logs                 Json      @default("[]")
   error_message   String?
   error_stack     String?
   started_at      DateTime  @default(now()) @db.Timestamptz
@@ -933,23 +956,25 @@ model agent_metrics_daily {
 // IM Channel Bindings — Maps IM channels to business scopes
 // ============================================================================
 model im_channel_bindings {
-  id                String   @id @default(uuid()) @db.Uuid
-  organization_id   String   @db.Uuid
-  business_scope_id String?  @db.Uuid
-  agent_id          String?  @db.Uuid // for agent-level IM bindings (digital twins)
-  channel_type      String   @db.VarChar(50)
-  channel_id        String   @db.VarChar(255)
-  channel_name      String?  @db.VarChar(255)
-  bot_token_enc     String?
-  webhook_url       String?
-  config            Json     @default("{}")
-  is_enabled        Boolean  @default(true)
-  created_by        String?  @db.Uuid
-  created_at        DateTime @default(now()) @db.Timestamptz
-  updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz
+  id                 String   @id @default(uuid()) @db.Uuid
+  organization_id    String   @db.Uuid
+  business_scope_id  String?  @db.Uuid
+  agent_id           String?  @db.Uuid // for agent-level IM bindings (digital twins)
+  channel_type       String   @db.VarChar(50)
+  channel_id         String   @db.VarChar(255)
+  channel_name       String?  @db.VarChar(255)
+  bot_token_enc      String?
+  webhook_url        String?
+  config             Json     @default("{}")
+  is_enabled         Boolean  @default(true)
+  sticky_session_id  String?  @db.Uuid // persistent session for non-threaded IM messages
+  created_by         String?  @db.Uuid
+  created_at         DateTime @default(now()) @db.Timestamptz
+  updated_at         DateTime @default(now()) @updatedAt @db.Timestamptz
 
   organization    organizations        @relation(fields: [organization_id], references: [id], onDelete: Cascade)
   business_scope  business_scopes?     @relation(fields: [business_scope_id], references: [id], onDelete: Cascade)
+  sticky_session  chat_sessions?       @relation("StickySession", fields: [sticky_session_id], references: [id], onDelete: SetNull)
   thread_sessions im_thread_sessions[]
 
   @@unique([organization_id, channel_type, channel_id], name: "unique_channel_binding")
@@ -958,6 +983,7 @@ model im_channel_bindings {
   @@index([agent_id])
   @@index([channel_type, channel_id])
   @@index([is_enabled])
+  @@index([sticky_session_id])
 }
 
 // ============================================================================
@@ -1138,16 +1164,18 @@ model scope_document_groups {
 // Chat Room Members — agents participating in a chat room (group mode)
 // ============================================================================
 model chat_room_members {
-  id         String   @id @default(uuid()) @db.Uuid
-  session_id String   @db.Uuid
-  agent_id   String   @db.Uuid
-  role       String   @default("member") @db.VarChar(20) // primary | member
-  is_active  Boolean  @default(true)
-  added_by   String?  @db.Uuid
-  joined_at  DateTime @default(now()) @db.Timestamptz
+  id              String   @id @default(uuid()) @db.Uuid
+  session_id      String   @db.Uuid
+  agent_id        String   @db.Uuid
+  role            String   @default("member") @db.VarChar(20) // primary | member
+  is_active       Boolean  @default(true)
+  added_by        String?  @db.Uuid
+  source_scope_id String?  @db.Uuid // scope the agent belongs to (for cross-scope rooms)
+  joined_at       DateTime @default(now()) @db.Timestamptz
 
-  session chat_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade)
-  agent   agents        @relation(fields: [agent_id], references: [id], onDelete: Cascade)
+  session chat_sessions  @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  agent   agents         @relation(fields: [agent_id], references: [id], onDelete: Cascade)
+  scope   business_scopes? @relation("room_member_scope", fields: [source_scope_id], references: [id], onDelete: SetNull)
 
   @@unique([session_id, agent_id], name: "unique_room_member")
   @@index([session_id])
@@ -1708,4 +1736,281 @@ model connector_oauth_providers {
 
   @@unique([organization_id, provider], name: "unique_oauth_provider_per_org")
   @@index([organization_id])
+}
+
+// ============================================================================
+// Customer Service Module — Support Conversations
+// ============================================================================
+model support_conversations {
+  id                String    @id @default(uuid()) @db.Uuid
+  organization_id   String    @db.Uuid
+  session_id        String?   @db.Uuid
+  channel_type      String    @default("web_widget") @db.VarChar(20)
+  channel_id        String?   @db.VarChar(255)
+  status            String    @default("open") @db.VarChar(20)
+  priority          String    @default("medium") @db.VarChar(20)
+  assigned_agent_id String?   @db.Uuid
+  customer_id       String?   @db.Uuid
+  ai_confidence     Float?
+  sentiment_score   Float?
+  first_response_at DateTime? @db.Timestamptz
+  resolved_at       DateTime? @db.Timestamptz
+  resolution_notes  String?
+  tags              Json      @default("[]")
+  metadata          Json      @default("{}")
+  created_at        DateTime  @default(now()) @db.Timestamptz
+  updated_at        DateTime  @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations      @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  customer     customer_profiles?  @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+  csat_surveys csat_surveys[]
+
+  @@index([organization_id])
+  @@index([session_id])
+  @@index([channel_type])
+  @@index([status])
+  @@index([priority])
+  @@index([assigned_agent_id])
+  @@index([customer_id])
+  @@index([created_at(sort: Desc)])
+  @@index([organization_id, status])
+  @@index([organization_id, channel_type])
+}
+
+// ============================================================================
+// Customer Service Module — Customer Profiles
+// ============================================================================
+model customer_profiles {
+  id              String   @id @default(uuid()) @db.Uuid
+  organization_id String   @db.Uuid
+  external_id     String?  @db.VarChar(255)
+  name            String   @db.VarChar(255)
+  email           String?  @db.VarChar(255)
+  phone           String?  @db.VarChar(50)
+  avatar_url      String?
+  source_channel  String?  @db.VarChar(20)
+  tags            Json     @default("[]")
+  custom_fields   Json     @default("{}")
+  notes           String?
+  metadata        Json     @default("{}")
+  created_at      DateTime @default(now()) @db.Timestamptz
+  updated_at      DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization           organizations           @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  support_conversations  support_conversations[]
+
+  @@unique([organization_id, external_id], name: "unique_customer_external_id")
+  @@index([organization_id])
+  @@index([email])
+  @@index([source_channel])
+  @@index([created_at(sort: Desc)])
+}
+
+// ============================================================================
+// Customer Service Module — FAQ Articles
+// ============================================================================
+model faq_articles {
+  id                String   @id @default(uuid()) @db.Uuid
+  organization_id   String   @db.Uuid
+  business_scope_id String?  @db.Uuid
+  question          String
+  answer            String
+  category          String?  @db.VarChar(100)
+  tags              Json     @default("[]")
+  view_count        Int      @default(0)
+  helpful_count     Int      @default(0)
+  not_helpful_count Int      @default(0)
+  status            String   @default("published") @db.VarChar(20)
+  sort_order        Int      @default(0)
+  created_by        String?  @db.Uuid
+  created_at        DateTime @default(now()) @db.Timestamptz
+  updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([business_scope_id])
+  @@index([category])
+  @@index([status])
+  @@index([sort_order])
+  @@index([view_count(sort: Desc)])
+  @@index([organization_id, status])
+}
+
+// ============================================================================
+// Customer Service Module — Agent Groups (skill-based routing)
+// ============================================================================
+model agent_groups {
+  id                String  @id @default(uuid()) @db.Uuid
+  organization_id   String  @db.Uuid
+  business_scope_id String? @db.Uuid
+  name              String  @db.VarChar(100)
+  description       String?
+  routing_strategy  String  @default("round_robin") @db.VarChar(20)
+  max_concurrent    Int     @default(5)
+  is_active         Boolean @default(true)
+  created_at        DateTime @default(now()) @db.Timestamptz
+  updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization         organizations          @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  agent_group_members  agent_group_members[]
+  escalation_rules     escalation_rules[]
+
+  @@unique([organization_id, name], name: "unique_agent_group_name")
+  @@index([organization_id])
+  @@index([business_scope_id])
+  @@index([is_active])
+}
+
+// ============================================================================
+// Customer Service Module — Agent Group Members
+// ============================================================================
+model agent_group_members {
+  id             String  @id @default(uuid()) @db.Uuid
+  agent_group_id String  @db.Uuid
+  user_id        String  @db.Uuid
+  is_active      Boolean @default(true)
+  current_load   Int     @default(0)
+  max_load       Int     @default(5)
+  created_at     DateTime @default(now()) @db.Timestamptz
+  updated_at     DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  agent_group agent_groups @relation(fields: [agent_group_id], references: [id], onDelete: Cascade)
+
+  @@unique([agent_group_id, user_id], name: "unique_group_member")
+  @@index([agent_group_id])
+  @@index([user_id])
+}
+
+// ============================================================================
+// Customer Service Module — Escalation Rules
+// ============================================================================
+model escalation_rules {
+  id                String  @id @default(uuid()) @db.Uuid
+  organization_id   String  @db.Uuid
+  business_scope_id String? @db.Uuid
+  name              String  @db.VarChar(100)
+  conditions        Json    @default("{}")
+  actions           Json    @default("{}")
+  priority          Int     @default(0)
+  is_active         Boolean @default(true)
+  agent_group_id    String? @db.Uuid
+  created_at        DateTime @default(now()) @db.Timestamptz
+  updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  agent_group  agent_groups? @relation(fields: [agent_group_id], references: [id], onDelete: SetNull)
+
+  @@index([organization_id])
+  @@index([business_scope_id])
+  @@index([is_active])
+  @@index([priority])
+}
+
+// ============================================================================
+// Customer Service Module — CSAT Surveys
+// ============================================================================
+model csat_surveys {
+  id              String   @id @default(uuid()) @db.Uuid
+  organization_id String   @db.Uuid
+  conversation_id String   @db.Uuid
+  customer_id     String?  @db.Uuid
+  rating          Int
+  comment         String?
+  channel_type    String?  @db.VarChar(20)
+  submitted_at    DateTime @default(now()) @db.Timestamptz
+
+  organization organizations          @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  conversation support_conversations  @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([conversation_id])
+  @@index([customer_id])
+  @@index([submitted_at(sort: Desc)])
+}
+
+// ============================================================================
+// Customer Service Module — Daily Metrics Aggregation
+// ============================================================================
+model support_metrics_daily {
+  id                     String  @id @default(uuid()) @db.Uuid
+  organization_id        String  @db.Uuid
+  business_scope_id      String? @db.Uuid
+  date                   DateTime @db.Date
+  total_conversations    Int     @default(0)
+  resolved_conversations Int     @default(0)
+  ai_resolved            Int     @default(0)
+  human_resolved         Int     @default(0)
+  avg_first_response_sec Float?
+  avg_resolution_sec     Float?
+  avg_csat_rating        Float?
+  csat_count             Int     @default(0)
+  escalated_count        Int     @default(0)
+  handoff_count          Int     @default(0)
+  created_at             DateTime @default(now()) @db.Timestamptz
+  updated_at             DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@unique([organization_id, date, business_scope_id], name: "unique_daily_metrics")
+  @@index([organization_id])
+  @@index([date])
+}
+
+// ============================================================================
+// Customer Service Module — Response Templates
+// ============================================================================
+model response_templates {
+  id                String  @id @default(uuid()) @db.Uuid
+  organization_id   String  @db.Uuid
+  business_scope_id String? @db.Uuid
+  name              String  @db.VarChar(100)
+  content           String
+  category          String? @db.VarChar(50)
+  shortcut          String? @db.VarChar(20)
+  channel_types     Json    @default("[]")
+  is_active         Boolean @default(true)
+  created_at        DateTime @default(now()) @db.Timestamptz
+  updated_at        DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([business_scope_id])
+  @@index([category])
+  @@index([is_active])
+}
+
+// ============================================================================
+// Customer Service Module — Business Hours
+// ============================================================================
+model business_hours {
+  id              String  @id @default(uuid()) @db.Uuid
+  organization_id String  @db.Uuid
+  name            String  @db.VarChar(100)
+  timezone        String  @default("Asia/Shanghai") @db.VarChar(50)
+  monday_start    String? @db.VarChar(5)
+  monday_end      String? @db.VarChar(5)
+  tuesday_start   String? @db.VarChar(5)
+  tuesday_end     String? @db.VarChar(5)
+  wednesday_start String? @db.VarChar(5)
+  wednesday_end   String? @db.VarChar(5)
+  thursday_start  String? @db.VarChar(5)
+  thursday_end    String? @db.VarChar(5)
+  friday_start    String? @db.VarChar(5)
+  friday_end      String? @db.VarChar(5)
+  saturday_start  String? @db.VarChar(5)
+  saturday_end    String? @db.VarChar(5)
+  sunday_start    String? @db.VarChar(5)
+  sunday_end      String? @db.VarChar(5)
+  holiday_dates   Json    @default("[]")
+  offline_message String?
+  is_active       Boolean @default(true)
+  created_at      DateTime @default(now()) @db.Timestamptz
+  updated_at      DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  organization organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+
+  @@index([organization_id])
+  @@index([is_active])
 }

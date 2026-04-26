@@ -51,6 +51,40 @@ function UserBubble({ message }: { message: Message }) {
   )
 }
 
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function TokenUsageBadge({ message }: { message: Message }) {
+  const { tokenUsage, model } = message
+  if (!tokenUsage && !model) return null
+
+  const parts: string[] = []
+  if (model) {
+    // Show short model name: "claude-sonnet-4-20250514" → "sonnet-4"
+    const short = model
+      .replace(/^claude-/, '')
+      .replace(/-\d{8}$/, '')
+    parts.push(short)
+  }
+  if (tokenUsage) {
+    const input = tokenUsage.input_tokens ?? 0
+    const output = tokenUsage.output_tokens ?? 0
+    parts.push(`↑${formatTokenCount(input)} ↓${formatTokenCount(output)}`)
+    if (tokenUsage.cache_read_input_tokens && tokenUsage.cache_read_input_tokens > 0) {
+      parts.push(`cache ${formatTokenCount(tokenUsage.cache_read_input_tokens)}`)
+    }
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[10px] text-gray-600 ml-11 mt-0.5 select-none">
+      {parts.join(' · ')}
+    </span>
+  )
+}
+
 function AIBubble({ message, isStreaming }: { message: Message; isStreaming?: boolean }) {
   const contentBlocks = useMemo(
     () => tryParseContentBlocks(message.content),
@@ -97,6 +131,7 @@ function AIBubble({ message, isStreaming }: { message: Message; isStreaming?: bo
       <span className="text-xs text-gray-500 mt-1 px-1 ml-11">
         {formatTime(message.timestamp)}
       </span>
+      {!isStreaming && <TokenUsageBadge message={message} />}
     </div>
   )
 }

@@ -8,9 +8,12 @@ import { writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { skillRepository, type SkillEntity } from '../repositories/skill.repository.js';
 import { agentRepository } from '../repositories/agent.repository.js';
+import { businessScopeRepository } from '../repositories/businessScope.repository.js';
 import { businessScopeService } from './businessScope.service.js';
+import { AppError } from '../middleware/errorHandler.js';
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { config } from '../config/index.js';
 
 export interface CreateSkillInput {
   name: string;
@@ -41,9 +44,8 @@ export interface SkillForRuntime {
   version: string;
 }
 
-const SKILLS_BUCKET = process.env.SKILLS_S3_BUCKET || 'super-agent-skills';
-const AWS_REGION = process.env.AWS_REGION || 'us-east-1';
-const s3Client = new S3Client({ region: AWS_REGION });
+const SKILLS_BUCKET = config.s3.skillsBucket;
+const s3Client = new S3Client({ region: config.aws.region });
 
 function generateHashId(organizationId: string, name: string): string {
   const hash = createHash('sha256');
@@ -245,6 +247,34 @@ export class SkillService {
   }
 
   /**
+   * Bind an existing skill to a business scope.
+   * Sets the skill's business_scope_id to the given scope.
+   */
+  async bindSkillToScope(organizationId: string, skillId: string, businessScopeId: string): Promise<void> {
+    const skill = await skillRepository.findById(skillId, organizationId);
+    if (!skill) throw AppError.notFound(`Skill with ID ${skillId} not found`);
+
+    const scope = await businessScopeRepository.findById(businessScopeId, organizationId);
+    if (!scope) throw AppError.notFound(`Business scope with ID ${businessScopeId} not found`);
+
+    await skillRepository.update(skillId, organizationId, { business_scope_id: businessScopeId });
+    await businessScopeService.bumpConfigVersion(businessScopeId, organizationId);
+  }
+
+  /**
+   * Unbind a skill from a business scope.
+   * Clears the skill's business_scope_id without deleting the skill.
+   */
+  async unbindSkillFromScope(organizationId: string, skillId: string, businessScopeId: string): Promise<void> {
+    const skill = await skillRepository.findById(skillId, organizationId);
+    if (!skill) throw AppError.notFound(`Skill with ID ${skillId} not found`);
+    if (skill.business_scope_id !== businessScopeId) return; // not bound to this scope
+
+    await skillRepository.update(skillId, organizationId, { business_scope_id: null });
+    await businessScopeService.bumpConfigVersion(businessScopeId, organizationId);
+  }
+
+  /**
    * Update the SKILL.md content for a skill.
    * Writes to the local file path stored in metadata.localPath.
    */
@@ -273,6 +303,116 @@ export class SkillService {
     await mkdir(dirname(skillMdPath), { recursive: true });
     await writeFile(skillMdPath, content, 'utf-8');
     return true;
+  }
+
+  /**
+   * Fork-on-write: update skill content scoped to a specific business scope.
+   *
+   * If the skill already belongs to this scope (owner_scope_id matches), update in place.
+   * If the skill is a shared/original skill, fork it first, then update the fork.
+   *
+   * Returns the (possibly new) skill ID.
+   */
+  async updateSkillContentForScope(
+    organizationId: string,
+    skillId: string,
+    scopeId: string,
+    content: string,
+  ): Promise<{ skillId: string; forked: boolean }> {
+    const skill = await skillRepository.findById(skillId, organizationId);
+    if (!skill) throw AppError.notFound(`Skill with ID ${skillId} not found`);
+
+    // If this skill already belongs to this scope, update in place
+    if (skill.owner_scope_id === scopeId) {
+      await this.updateSkillContent(organizationId, skillId, content);
+      return { skillId, forked: false };
+    }
+
+    // Check if a fork already exists for this scope
+    const existingFork = await skillRepository.findScopeFork(organizationId, skillId, scopeId);
+    if (existingFork) {
+      await this.updateSkillContent(organizationId, existingFork.id, content);
+      return { skillId: existingFork.id, forked: false };
+    }
+
+    // Fork: create a new skill record as a private copy for this scope
+    const fork = await this.forkSkillForScope(organizationId, skill, scopeId);
+
+    // Write content to the fork
+    await this.updateSkillContent(organizationId, fork.id, content);
+
+    return { skillId: fork.id, forked: true };
+  }
+
+  /**
+   * Create a private fork of a skill for a specific scope.
+   *
+   * The fork gets:
+   * - A unique name (original-name@scope-{short-id})
+   * - parent_skill_id pointing to the original
+   * - owner_scope_id set to the target scope
+   * - Its own hash_id, local file path, and S3 prefix
+   * - A copy of the original skill's content files
+   */
+  async forkSkillForScope(
+    organizationId: string,
+    originalSkill: SkillEntity,
+    scopeId: string,
+  ): Promise<SkillEntity> {
+    const shortScopeId = scopeId.substring(0, 8);
+    const forkName = `${originalSkill.name}@scope-${shortScopeId}`;
+    const forkHashId = generateHashId(organizationId, forkName);
+
+    // Create the fork record
+    const fork = await skillRepository.create(organizationId, {
+      name: forkName,
+      display_name: originalSkill.display_name,
+      description: originalSkill.description,
+      hash_id: forkHashId,
+      s3_bucket: originalSkill.s3_bucket,
+      s3_prefix: `skills/${forkHashId}/`,
+      version: originalSkill.version,
+      status: 'active',
+      skill_type: originalSkill.skill_type,
+      tags: originalSkill.tags as string[],
+      metadata: {
+        ...(originalSkill.metadata as Record<string, unknown> || {}),
+        forkedFrom: originalSkill.id,
+        forkedAt: new Date().toISOString(),
+      },
+    } as any);
+
+    // Set parent_skill_id and owner_scope_id
+    await skillRepository.update(fork.id, organizationId, {
+      parent_skill_id: originalSkill.id,
+      owner_scope_id: scopeId,
+      business_scope_id: scopeId,
+    } as Partial<SkillEntity>);
+
+    // Copy the original skill's content files to the fork's directory
+    const originalMetadata = originalSkill.metadata as Record<string, unknown> | null;
+    const originalLocalPath = originalMetadata?.localPath as string | undefined;
+    if (originalLocalPath) {
+      const forkDir = join(process.cwd(), 'data', 'skills', forkHashId);
+      await mkdir(forkDir, { recursive: true });
+      try {
+        const { cp } = await import('fs/promises');
+        await cp(originalLocalPath, forkDir, { recursive: true });
+      } catch {
+        // If copy fails, the fork starts empty — content will be written by the caller
+      }
+      // Update fork metadata with its own local path
+      await skillRepository.update(fork.id, organizationId, {
+        metadata: {
+          ...(fork.metadata as Record<string, unknown> || {}),
+          localPath: forkDir,
+          forkedFrom: originalSkill.id,
+          forkedAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    return (await skillRepository.findById(fork.id, organizationId))!;
   }
 }
 

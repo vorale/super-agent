@@ -59,10 +59,10 @@ export class ProjectGovernanceService {
    * Runs asynchronously — does not block issue creation.
    */
   async enrichIssue(orgId: string, projectId: string, issueId: string, userId: string): Promise<void> {
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) return;
 
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project?.business_scope_id) {
       console.log(`[Governance] Skipping enrichment for issue ${issueId}: no business scope`);
       return;
@@ -210,10 +210,10 @@ Rules:
    * Detects: conflicts, dependencies, duplicates, related issues.
    */
   async detectConflicts(orgId: string, projectId: string, issueId: string, userId: string): Promise<void> {
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) return;
 
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project?.business_scope_id) return;
 
     // Get all active issues (exclude self and done/cancelled)
@@ -468,7 +468,7 @@ Rules:
    * Provides: recommended order, merge suggestions, missing info, risk flags.
    */
   async generateTriageReport(orgId: string, projectId: string, userId: string): Promise<TriageReport> {
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project?.business_scope_id) {
       throw AppError.validation('No business scope configured for this project.');
     }
@@ -573,9 +573,15 @@ Rules:
   /**
    * Human reviews an AI-discovered relation: confirm or dismiss.
    */
-  async reviewRelation(relationId: string, userId: string, action: 'confirmed' | 'dismissed'): Promise<void> {
-    const relation = await prisma.project_issue_relations.findFirst({ where: { id: relationId } });
+  async reviewRelation(orgId: string, projectId: string, relationId: string, userId: string, action: 'confirmed' | 'dismissed'): Promise<void> {
+    const relation = await prisma.project_issue_relations.findFirst({
+      where: { id: relationId, project_id: projectId },
+    });
     if (!relation) throw AppError.notFound('Relation not found');
+
+    // Verify project belongs to org
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
+    if (!project) throw AppError.notFound('Relation not found');
 
     await prisma.project_issue_relations.update({
       where: { id: relationId },
@@ -583,13 +589,17 @@ Rules:
     });
 
     // Recompute readiness for the source issue
-    await this.computeReadiness(relation.project_id, relation.source_issue_id);
+    await this.computeReadiness(projectId, relation.source_issue_id);
   }
 
   /**
    * Get all relations for an issue (both as source and target).
    */
-  async getIssueRelations(projectId: string, issueId: string) {
+  async getIssueRelations(orgId: string, projectId: string, issueId: string) {
+    // Verify project belongs to org
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
+    if (!project) throw AppError.notFound('Project not found');
+
     return prisma.project_issue_relations.findMany({
       where: {
         project_id: projectId,
@@ -606,7 +616,11 @@ Rules:
   /**
    * Get all relations for a project (for board-level display).
    */
-  async getProjectRelations(projectId: string) {
+  async getProjectRelations(orgId: string, projectId: string) {
+    // Verify project belongs to org
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
+    if (!project) throw AppError.notFound('Project not found');
+
     return prisma.project_issue_relations.findMany({
       where: { project_id: projectId, status: { not: 'dismissed' } },
       include: {

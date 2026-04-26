@@ -36,6 +36,7 @@ interface ChatBody {
     message: string;
     sessionId?: string;
     businessScopeId?: string;
+    systemPromptOverride?: string;
   };
 }
 
@@ -124,6 +125,21 @@ export async function workshopRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * POST /reset — Reset the workshop session to an empty state (no equipped skills)
+   */
+  fastify.post<AgentParams>(
+    '/:agentId/workshop/reset',
+    { preHandler: [authenticate] },
+    async (request: FastifyRequest<AgentParams>, reply: FastifyReply) => {
+      const orgId = request.user!.orgId;
+      const { agentId } = request.params;
+
+      await workshopService.resetSession(orgId, agentId);
+      return reply.status(204).send();
+    },
+  );
+
+  /**
    * POST /save — Persist the workshop equipped skills to the agent
    */
   fastify.post<AgentParams>(
@@ -149,7 +165,7 @@ export async function workshopRoutes(fastify: FastifyInstance): Promise<void> {
       const orgId = request.user!.orgId;
       const userId = request.user!.id;
       const { agentId } = request.params;
-      const { message, sessionId, businessScopeId } = request.body;
+      const { message, sessionId, businessScopeId, systemPromptOverride } = request.body;
 
       if (!message?.trim()) {
         return reply.status(400).send({ error: 'message is required' });
@@ -170,6 +186,7 @@ export async function workshopRoutes(fastify: FastifyInstance): Promise<void> {
           message: message.trim(),
         },
         workshopSkills,
+        systemPromptOverride,
       );
     },
   );

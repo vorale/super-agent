@@ -12,6 +12,8 @@ import { prisma } from '../config/database.js';
  */
 export type SessionStatus = 'idle' | 'generating' | 'error';
 
+export type SessionSource = 'web' | 'im';
+
 export interface ChatSessionEntity {
   id: string;
   organization_id: string;
@@ -21,6 +23,7 @@ export interface ChatSessionEntity {
   claude_session_id: string | null;
   title: string | null;
   status: SessionStatus;
+  source: SessionSource;
   sop_context: string | null;
   context: Record<string, unknown>;
   room_mode: 'single' | 'group';

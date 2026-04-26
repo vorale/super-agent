@@ -141,6 +141,44 @@ export async function skillMarketplaceRoutes(fastify: FastifyInstance): Promise<
             } catch (cmdErr) {
               request.log.warn({ err: cmdErr, skillName: result.name }, 'Failed to sync skill to container (will sync on next invoke)');
             }
+
+            // Also upload skill files to S3 so the workspace file tree (which
+            // falls back to S3 when the container is unreachable) can see them.
+            try {
+              const { readdir, readFile, stat } = await import('fs/promises');
+              const { join } = await import('path');
+              const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+              const s3 = new S3Client({ region: appConfig.aws.region });
+              const s3Bucket = appConfig.agentcore.workspaceS3Bucket;
+              const s3Prefix = `${request.user!.orgId}/${session.business_scope_id}/${sessionId}/`;
+
+              const uploadSkillFiles = async (srcDir: string, destPrefix: string): Promise<void> => {
+                const entries = await readdir(srcDir, { withFileTypes: true });
+                for (const entry of entries) {
+                  const srcPath = join(srcDir, entry.name);
+                  const destKey = `${destPrefix}/${entry.name}`;
+                  if (entry.isDirectory()) {
+                    await uploadSkillFiles(srcPath, destKey);
+                  } else {
+                    const content = await readFile(srcPath);
+                    await s3.send(new PutObjectCommand({
+                      Bucket: s3Bucket,
+                      Key: destKey,
+                      Body: content,
+                      ContentLength: content.length,
+                    }));
+                  }
+                }
+              };
+
+              await uploadSkillFiles(
+                result.localPath,
+                `${s3Prefix}.claude/skills/${result.name}`,
+              );
+              request.log.info({ skillName: result.name, sessionId }, 'Skill synced to S3');
+            } catch (s3Err) {
+              request.log.warn({ err: s3Err, skillName: result.name }, 'Failed to sync skill to S3');
+            }
           }
         }
       } catch (err) {

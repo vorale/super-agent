@@ -33,6 +33,7 @@ interface AgentCoreEvent {
     content?: string;
     is_error?: boolean;
   }>;
+  model?: string;
   code?: string;
   message?: string;
   duration_ms?: number;
@@ -101,6 +102,25 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
         : Promise.resolve(),
     ]);
 
+    // Filter out in-process MCP servers (e.g. workflow-progress SDK servers)
+    // that contain circular references and cannot be serialized to JSON.
+    // Only serializable MCP configs (stdio/sse with string fields) are sent to the container.
+    let serializableMcpServers: Record<string, unknown> | undefined;
+    if (mcpServers && Object.keys(mcpServers).length > 0) {
+      serializableMcpServers = {};
+      for (const [name, server] of Object.entries(mcpServers)) {
+        try {
+          JSON.stringify(server);
+          serializableMcpServers[name] = server;
+        } catch {
+          console.log(`[agentcore-runtime] Skipping non-serializable MCP server: ${name}`);
+        }
+      }
+      if (Object.keys(serializableMcpServers).length === 0) {
+        serializableMcpServers = undefined;
+      }
+    }
+
     const payload = JSON.stringify({
       prompt: options.message,
       session_id: options.providerSessionId ?? undefined,
@@ -110,7 +130,8 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
       org_id: options.organizationId,
       agent_id: options.agentId,
       system_prompt: agentConfig.systemPrompt ?? undefined,
-      mcp_servers: mcpServers && Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+      model: agentConfig.model ?? undefined,
+      mcp_servers: serializableMcpServers,
       workspace_s3_bucket: this.workspaceBucket,
       workspace_s3_prefix: s3Prefix,
     });
@@ -297,7 +318,16 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
 
   private async uploadDirToS3(localDir: string, s3Prefix: string): Promise<number> {
     let count = 0;
-    const SKIP = new Set(['node_modules', '.git', 'dist', '__pycache__']);
+    const SKIP = new Set([
+      'node_modules', '.git', '__pycache__',
+      '.venv', 'venv', 'env', '.env',
+      '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache',
+      '.next', '.nuxt', '.turbo', '.cache', '.parcel-cache',
+      'bower_components', '.gradle', 'target', '.cargo',
+    ]);
+
+    // Phase 1: Collect all files to upload
+    const filesToUpload: Array<{ fullPath: string; relPath: string; size: number }> = [];
 
     const walk = async (dir: string): Promise<void> => {
       let entries;
@@ -308,46 +338,45 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
         if (entry.isDirectory()) {
           await walk(fullPath);
         } else if (entry.isSymbolicLink()) {
-          // Follow symlink — if it points to a directory, walk it; if file, upload
           try {
-            const linkStat = statSync(fullPath); // follows symlink
+            const linkStat = statSync(fullPath);
             if (linkStat.isDirectory()) {
               await walk(fullPath);
-            } else if (linkStat.isFile() && linkStat.size <= 50 * 1024 * 1024) {
-              const relPath = relative(localDir, fullPath);
-              const key = `${s3Prefix}${relPath}`;
-              await this.s3Client.send(new PutObjectCommand({
-                Bucket: this.workspaceBucket,
-                Key: key,
-                Body: createReadStream(fullPath),
-                ContentLength: linkStat.size,
-              }));
-              count++;
+            } else if (linkStat.isFile() && linkStat.size <= 100 * 1024 * 1024) {
+              filesToUpload.push({ fullPath, relPath: relative(localDir, fullPath), size: linkStat.size });
             }
-          } catch {
-            // Broken symlink or permission error — skip silently
-          }
+          } catch { /* Broken symlink — skip */ }
         } else {
-          const relPath = relative(localDir, fullPath);
-          const key = `${s3Prefix}${relPath}`;
           try {
             const fileStat = statSync(fullPath);
-            if (fileStat.size > 50 * 1024 * 1024) continue; // skip >50MB
-            await this.s3Client.send(new PutObjectCommand({
-              Bucket: this.workspaceBucket,
-              Key: key,
-              Body: createReadStream(fullPath),
-              ContentLength: fileStat.size,
-            }));
-            count++;
-          } catch (err) {
-            console.warn(`[agentcore-runtime] Upload failed: ${key}`, err);
-          }
+            if (fileStat.size > 100 * 1024 * 1024) continue;
+            filesToUpload.push({ fullPath, relPath: relative(localDir, fullPath), size: fileStat.size });
+          } catch { /* skip */ }
         }
       }
     };
 
     await walk(localDir);
+
+    // Phase 2: Upload in parallel batches (concurrency limit = 10)
+    const CONCURRENCY = 10;
+    for (let i = 0; i < filesToUpload.length; i += CONCURRENCY) {
+      const batch = filesToUpload.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(batch.map(async (file) => {
+        const key = `${s3Prefix}${file.relPath}`;
+        await this.s3Client.send(new PutObjectCommand({
+          Bucket: this.workspaceBucket,
+          Key: key,
+          Body: createReadStream(file.fullPath),
+          ContentLength: file.size,
+        }));
+      }));
+      for (const r of results) {
+        if (r.status === 'fulfilled') count++;
+        else console.warn(`[agentcore-runtime] Upload failed:`, r.reason);
+      }
+    }
+
     return count;
   }
 
@@ -355,7 +384,12 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
   // S3 → local sync (pull container changes back to local workspace)
   // ---------------------------------------------------------------------------
 
-  private async syncBackFromS3(s3Prefix: string, localDir: string): Promise<number> {
+  /**
+   * Sync workspace files from S3 back to local filesystem.
+   * Public so that other services (e.g. preview, detect-apps) can ensure
+   * the local workspace is up-to-date before operating on it.
+   */
+  async syncBackFromS3(s3Prefix: string, localDir: string): Promise<number> {
     let downloaded = 0;
     let continuationToken: string | undefined;
 
@@ -370,6 +404,18 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
         if (!obj.Key) continue;
         const relativePath = obj.Key.slice(s3Prefix.length);
         if (!relativePath || relativePath.endsWith('/')) continue;
+
+        // Skip auto-generated directories (should not have been uploaded, but
+        // guard against it on the download side too)
+        const firstSegment = relativePath.split('/')[0];
+        const SKIP_SEGMENTS = new Set([
+          'node_modules', '.git', '__pycache__',
+          '.venv', 'venv', 'env', '.env',
+          '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache',
+          '.next', '.nuxt', '.turbo', '.cache', '.parcel-cache',
+          'bower_components', '.gradle', 'target', '.cargo',
+        ]);
+        if (SKIP_SEGMENTS.has(firstSegment)) continue;
 
         const localPath = join(localDir, relativePath);
         const localDirPath = dirname(localPath);
@@ -438,7 +484,7 @@ export class AgentCoreAgentRuntime implements AgentRuntime {
       case 'session_start':
         return { type: 'session_start', sessionId: event.session_id };
       case 'assistant':
-        return { type: 'assistant', sessionId: event.session_id, content: (event.content ?? []) as ContentBlock[] };
+        return { type: 'assistant', sessionId: event.session_id, content: (event.content ?? []) as ContentBlock[], model: event.model };
       case 'result': {
         // Map token_usage from AgentCore container format to backend format
         const tu = (event as any).token_usage;

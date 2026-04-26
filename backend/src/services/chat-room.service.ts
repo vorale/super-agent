@@ -17,6 +17,19 @@ export interface CreateRoomOptions {
   agentIds: string[];
 }
 
+export interface CrossScopeRoomMember {
+  agentId: string;
+  scopeId: string;
+}
+
+export interface CreateCrossScopeRoomOptions {
+  title?: string;
+  /** Primary scope for the room (used for workspace if needed) */
+  primaryScopeId?: string;
+  /** Members from potentially different scopes */
+  members: CrossScopeRoomMember[];
+}
+
 export class ChatRoomService {
   // ==========================================================================
   // Room Lifecycle
@@ -83,6 +96,57 @@ export class ChatRoomService {
     });
   }
 
+  /**
+   * Create a cross-scope group chat room with agents from different business scopes.
+   * Each member carries its source scope for workspace/skill resolution.
+   */
+  async createCrossScopeRoom(
+    organizationId: string,
+    userId: string,
+    options: CreateCrossScopeRoomOptions,
+  ): Promise<ChatSessionEntity & { members: ChatRoomMemberWithAgent[] }> {
+    if (!options.members || options.members.length === 0) {
+      throw AppError.validation('At least one member is required');
+    }
+
+    // Validate all agents and scopes exist
+    for (const member of options.members) {
+      const agent = await agentRepository.findById(member.agentId, organizationId);
+      if (!agent) throw AppError.notFound(`Agent with ID ${member.agentId} not found`);
+      const scope = await businessScopeRepository.findById(member.scopeId, organizationId);
+      if (!scope) throw AppError.notFound(`Business scope with ID ${member.scopeId} not found`);
+    }
+
+    // Use the first scope as the primary (for session association)
+    const primaryScopeId = options.primaryScopeId ?? options.members[0].scopeId;
+
+    const session = await chatSessionRepository.createForUser(
+      {
+        business_scope_id: primaryScopeId,
+        agent_id: null,
+        claude_session_id: null,
+        title: options.title ?? 'Cross-Scope Chat',
+        status: 'idle',
+        sop_context: null,
+        context: { cross_scope: true },
+        room_mode: 'group',
+        routing_strategy: 'auto',
+      },
+      organizationId,
+      userId,
+    );
+
+    // Add members with their source scope
+    for (const member of options.members) {
+      await chatRoomMemberRepository.addMember(
+        session.id, member.agentId, 'member', userId, member.scopeId,
+      );
+    }
+
+    const members = await chatRoomMemberRepository.findBySession(session.id);
+    return { ...session, members };
+  }
+
   // ==========================================================================
   // Member Management
   // ==========================================================================
@@ -92,6 +156,7 @@ export class ChatRoomService {
     roomId: string,
     agentId: string,
     addedBy?: string,
+    sourceScopeId?: string,
   ): Promise<void> {
     const session = await chatSessionRepository.findById(roomId, organizationId);
     if (!session) throw AppError.notFound(`Room with ID ${roomId} not found`);
@@ -102,7 +167,10 @@ export class ChatRoomService {
     const agent = await agentRepository.findById(agentId, organizationId);
     if (!agent) throw AppError.notFound(`Agent with ID ${agentId} not found`);
 
-    await chatRoomMemberRepository.addMember(roomId, agentId, 'member', addedBy);
+    // Use provided scope or fall back to agent's own scope
+    const effectiveScopeId = sourceScopeId ?? agent.business_scope_id ?? undefined;
+
+    await chatRoomMemberRepository.addMember(roomId, agentId, 'member', addedBy, effectiveScopeId);
 
     // Add system message
     await chatMessageRepository.create({
@@ -165,10 +233,15 @@ export class ChatRoomService {
     const messages = await chatMessageRepository.findBySession(organizationId, roomId, { limit: 50 });
     const orderedMessages = messages.reverse();
 
-    let context = `You are in a group chat room. Room members:\n`;
+    // Detect cross-scope room
+    const scopeIds = new Set(members.map(m => m.source_scope_id ?? m.agent.business_scope_id).filter(Boolean));
+    const isCrossScope = scopeIds.size > 1;
+
+    let context = `You are in a group chat room.${isCrossScope ? ' This is a cross-team collaboration room with agents from different business domains.' : ''}\n\nRoom members:\n`;
     for (const member of members) {
       const marker = member.agent_id === targetAgentId ? ' (you)' : '';
-      context += `- ${member.agent.display_name}${marker}: ${member.agent.role || 'General assistant'}\n`;
+      const scopeLabel = isCrossScope && member.source_scope_id ? ` [scope: ${member.source_scope_id}]` : '';
+      context += `- ${member.agent.display_name}${marker}: ${member.agent.role || 'General assistant'}${scopeLabel}\n`;
     }
 
     if (orderedMessages.length > 0) {
@@ -177,7 +250,6 @@ export class ChatRoomService {
         if (msg.type === 'user') {
           context += `[User]: ${msg.content}\n`;
         } else if (msg.type === 'system') {
-          // Skip system messages in context
           continue;
         } else {
           const agent = members.find(m => m.agent_id === msg.agent_id);
@@ -188,6 +260,9 @@ export class ChatRoomService {
     }
 
     context += `\nRespond based on the conversation context above. You are the agent being addressed.`;
+    if (isCrossScope) {
+      context += `\nNote: Other agents in this room may have different domain expertise. Collaborate and defer to their expertise when appropriate.`;
+    }
     return context;
   }
 

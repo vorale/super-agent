@@ -26,7 +26,33 @@ import { pipeline } from 'stream/promises';
 import { createReadStream, createWriteStream } from 'fs';
 
 const WORKSPACE_DIR = '/workspace';
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '__pycache__']);
+/**
+ * Directories to skip during S3 sync.
+ * These are large, auto-generated directories that can be recreated locally
+ * and would massively slow down sync (node_modules alone can be 100k+ files).
+ */
+const SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '__pycache__',
+  '.venv',
+  'venv',
+  'env',
+  '.env',
+  '.tox',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.cache',
+  '.parcel-cache',
+  'bower_components',
+  '.gradle',
+  'target',          // Maven/Rust
+  '.cargo',
+]);
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------

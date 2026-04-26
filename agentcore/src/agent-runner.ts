@@ -39,6 +39,16 @@ function createFileChangeHook(bucket: string, prefix: string) {
     if (!filePath || !filePath.startsWith('/workspace/')) return {};
 
     const relativePath = filePath.replace('/workspace/', '');
+
+    // Skip auto-generated directories that should never be synced to S3
+    const firstSegment = relativePath.split('/')[0];
+    const SKIP_PREFIXES = new Set([
+      'node_modules', '.git', '__pycache__', '.venv', 'venv',
+      '.next', '.nuxt', '.turbo', '.cache', '.parcel-cache',
+      'bower_components', '.gradle', 'target', '.cargo',
+    ]);
+    if (SKIP_PREFIXES.has(firstSegment)) return {};
+
     const key = `${prefix}${relativePath}`;
 
     try {
@@ -274,6 +284,13 @@ export async function* runAgent(payload: AgentPayload): AsyncGenerator<AgentEven
     settingSources: ['project'],
   };
 
+  // Dynamic model override: pass directly to SDK options so it takes effect
+  // per-invocation (env var approach only works for the first call in a session).
+  if (payload.model) {
+    baseOptions.model = payload.model;
+    console.log(`[agent-runner] Model override via options: ${payload.model}`);
+  }
+
   if (payload.mcp_servers && Object.keys(payload.mcp_servers).length > 0) {
     baseOptions.mcpServers = payload.mcp_servers;
   }
@@ -334,6 +351,7 @@ async function* runWithOptions(
 
     if (msg.type === 'assistant') {
       const rawContent = (msg.message as Record<string, unknown>)?.content;
+      const model = (msg.message as Record<string, unknown>)?.model as string | undefined;
       const blocks = Array.isArray(rawContent)
         ? rawContent.map(mapContentBlock)
         : [];
@@ -341,6 +359,7 @@ async function* runWithOptions(
         type: 'assistant',
         content: blocks,
         session_id: msg.session_id as string | undefined,
+        model,
       };
       continue;
     }

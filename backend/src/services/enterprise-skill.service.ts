@@ -5,7 +5,7 @@
  * import from skills.sh, install to workspace, and vote.
  */
 
-import { readFile, mkdir, cp } from 'fs/promises';
+import { readFile, mkdir, cp, access } from 'fs/promises';
 import { join, resolve } from 'path';
 import { createHash } from 'crypto';
 import {
@@ -222,15 +222,25 @@ export class EnterpriseSkillService {
     const metadata = entry.skill.metadata as Record<string, unknown> | null;
     const localPath = metadata?.localPath as string | undefined;
 
+    // Try local path first, fall back to S3 download if path is missing or inaccessible
+    let installed = false;
     if (localPath) {
-      await workspaceManager.installSkillToWorkspace(
-        organizationId,
-        session.business_scope_id,
-        sessionId,
-        entry.skill.name,
-        localPath,
-      );
-    } else {
+      try {
+        await access(localPath);
+        await workspaceManager.installSkillToWorkspace(
+          organizationId,
+          session.business_scope_id,
+          sessionId,
+          entry.skill.name,
+          localPath,
+        );
+        installed = true;
+      } catch {
+        // localPath not accessible (e.g. deployed to a different server), fall through to S3
+      }
+    }
+
+    if (!installed) {
       // Download from S3 into workspace
       const skillsDir = join(
         workspaceManager.getSessionWorkspacePath(organizationId, session.business_scope_id, sessionId),
@@ -244,13 +254,80 @@ export class EnterpriseSkillService {
           hashId: entry.skill.hash_id,
           s3Bucket: entry.skill.s3_bucket,
           s3Prefix: entry.skill.s3_prefix,
-          localPath,
+          localPath: undefined,
         },
         skillsDir,
       );
     }
 
     await enterpriseSkillRepository.incrementInstallCount(marketplaceId);
+
+    // In agentcore mode, sync the installed skill to S3 and the container
+    // so the workspace file tree can see it immediately.
+    const { config: appConfig } = await import('../config/index.js');
+    if (appConfig.agentRuntime === 'agentcore') {
+      const skillSourceDir = join(
+        workspaceManager.getSessionWorkspacePath(organizationId, session.business_scope_id, sessionId),
+        '.claude', 'skills', entry.skill.name,
+      );
+
+      // Sync to S3
+      try {
+        const { readdir, readFile: readFileAsync, stat } = await import('fs/promises');
+        const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+        const s3 = new S3Client({ region: appConfig.aws.region });
+        const s3Bucket = appConfig.agentcore.workspaceS3Bucket;
+        const s3Prefix = `${organizationId}/${session.business_scope_id}/${sessionId}/`;
+
+        const uploadSkillFiles = async (srcDir: string, destPrefix: string): Promise<void> => {
+          const entries = await readdir(srcDir, { withFileTypes: true });
+          for (const e of entries) {
+            const srcPath = join(srcDir, e.name);
+            const destKey = `${destPrefix}/${e.name}`;
+            if (e.isDirectory()) {
+              await uploadSkillFiles(srcPath, destKey);
+            } else {
+              const content = await readFileAsync(srcPath);
+              await s3.send(new PutObjectCommand({
+                Bucket: s3Bucket,
+                Key: destKey,
+                Body: content,
+                ContentLength: content.length,
+              }));
+            }
+          }
+        };
+
+        await uploadSkillFiles(skillSourceDir, `${s3Prefix}.claude/skills/${entry.skill.name}`);
+      } catch (err) {
+        console.warn(`[enterprise-skill] Failed to sync skill "${entry.skill.name}" to S3:`, err);
+      }
+
+      // Sync to container
+      try {
+        const { agentCoreCommandService } = await import('./agentcore-command.service.js');
+        const { readdir, readFile: readFileAsync } = await import('fs/promises');
+
+        const writeSkillFiles = async (srcDir: string, destPrefix: string): Promise<void> => {
+          const entries = await readdir(srcDir, { withFileTypes: true });
+          for (const e of entries) {
+            const srcPath = join(srcDir, e.name);
+            const destPath = `${destPrefix}/${e.name}`;
+            if (e.isDirectory()) {
+              await writeSkillFiles(srcPath, destPath);
+            } else {
+              const content = await readFileAsync(srcPath, 'utf-8');
+              await agentCoreCommandService.writeFile(sessionId, destPath, content);
+            }
+          }
+        };
+
+        await agentCoreCommandService.runCommand(sessionId, `mkdir -p /workspace/.claude/skills/${entry.skill.name}`);
+        await writeSkillFiles(skillSourceDir, `.claude/skills/${entry.skill.name}`);
+      } catch (err) {
+        console.warn(`[enterprise-skill] Failed to sync skill "${entry.skill.name}" to container:`, err);
+      }
+    }
   }
 
   /**

@@ -411,6 +411,7 @@ export function WorkflowEditor() {
   const [isRunningV2, setIsRunningV2] = useState(false);
   const [v2NodeStates, setV2NodeStates] = useState<Map<string, NodeExecutionState>>(new Map());
   const [showRunModal, setShowRunModal] = useState(false);
+  const v2AbortControllerRef = useRef<AbortController | null>(null);
   
   // Get input variables from start node
   const getStartNodeVariables = useCallback(() => {
@@ -444,6 +445,8 @@ export function WorkflowEditor() {
 
     const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
     const token = getAuthToken();
+    const abortController = new AbortController();
+    v2AbortControllerRef.current = abortController;
     try {
       const response = await fetch(`${API_BASE_URL}/api/workflows/${selectedWorkflow.id}/execute-v2`, {
         method: 'POST',
@@ -451,6 +454,7 @@ export function WorkflowEditor() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
+        signal: abortController.signal,
         body: JSON.stringify({
           businessScopeId: activeScopeId,
           variables: runtimeVariables.map(v => ({
@@ -545,9 +549,16 @@ export function WorkflowEditor() {
       // If we didn't get a 'done' event, finish anyway
       copilotRef.current?.finishExecution(msgId, true);
     } catch (err) {
-      console.error('V2 execution error:', err);
-      copilotRef.current?.finishExecution(msgId, false, err instanceof Error ? err.message : 'Execution failed');
+      // Don't show error for user-initiated abort
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        console.log('V2 execution aborted by user');
+        copilotRef.current?.finishExecution(msgId, false, 'Execution stopped by user');
+      } else {
+        console.error('V2 execution error:', err);
+        copilotRef.current?.finishExecution(msgId, false, err instanceof Error ? err.message : 'Execution failed');
+      }
     } finally {
+      v2AbortControllerRef.current = null;
       setIsRunningV2(false);
       // Refresh execution history after run completes
       // Delay slightly to ensure the backend has finished writing the final status
@@ -559,6 +570,12 @@ export function WorkflowEditor() {
 
   // Handle abort workflow
   const handleAbortWorkflow = useCallback(async () => {
+    // Abort the V2 SSE fetch connection
+    if (v2AbortControllerRef.current) {
+      v2AbortControllerRef.current.abort();
+      v2AbortControllerRef.current = null;
+    }
+    // Also try the V1 abort path (for non-V2 executions)
     await abort();
   }, [abort]);
 
@@ -583,12 +600,42 @@ export function WorkflowEditor() {
   }, [selectedWorkflow, applyNaturalLanguageChanges, t]);
 
   // Handle workflow generation from copilot
-  const handleGenerateWorkflow = useCallback((newCanvasData: CanvasData, title: string, _variables?: WorkflowVariable[]) => {
+  const handleGenerateWorkflow = useCallback(async (newCanvasData: CanvasData, title: string, _variables?: WorkflowVariable[]) => {
     setCanvasData(newCanvasData);
-    setIsDirty(true);
     setCopilotSuccess(`Generated workflow: ${title}`);
     setTimeout(() => setCopilotSuccess(null), 3000);
-  }, []);
+
+    // Auto-save: if we have a selected workflow, save immediately.
+    // If no workflow exists yet, create one first.
+    if (selectedWorkflow) {
+      const updates = canvasDataToWorkflow(newCanvasData, selectedWorkflow);
+      await updateWorkflow(selectedWorkflow.id, { ...updates, name: title });
+      setIsDirty(false);
+    } else if (activeScopeId) {
+      const workflowData = canvasDataToWorkflow(newCanvasData, {
+        name: title,
+        category: 'hr',
+        version: 'v1.0',
+        isOfficial: false,
+        nodes: [],
+        connections: [],
+      } as WorkflowType);
+      const created = await createWorkflow({
+        name: title,
+        category: 'hr',
+        businessScopeId: activeScopeId,
+        version: 'v1.0',
+        isOfficial: false,
+        nodes: workflowData.nodes ?? [],
+        connections: workflowData.connections ?? [],
+        createdBy: 'copilot',
+      });
+      if (created) {
+        setSelectedWorkflowId(created.id);
+        setIsDirty(false);
+      }
+    }
+  }, [selectedWorkflow, activeScopeId, updateWorkflow, createWorkflow]);
 
   // Handle workflow import
   const handleImportFromImage = useCallback(async (file: File): Promise<WorkflowImportResult | null> => {

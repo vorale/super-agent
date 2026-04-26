@@ -85,6 +85,7 @@ export const chatStreamRequestSchema = z.object({
   mention_agent_id: uuidSchema.optional(),
   session_id: uuidSchema.optional(),
   message: z.string().min(1, 'Message is required'),
+  model: z.string().max(200).optional(),
   context: z.record(z.string(), z.unknown()).optional(),
 });
 

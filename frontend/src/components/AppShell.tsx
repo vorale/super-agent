@@ -20,6 +20,7 @@ const getPageTitle = (pathname: string, t: (key: string) => string): string => {
   if (pathname.startsWith('/agents')) return t('nav.agents')
   if (pathname.startsWith('/tools')) return t('nav.tools')
   if (pathname.startsWith('/apps')) return t('nav.apps')
+  if (pathname.startsWith('/support')) return t('nav.support')
   if (pathname.startsWith('/tasks')) return t('nav.tasks')
   if (pathname.startsWith('/task-monitoring')) return t('taskExecution.title')
   return t('header.commandCenter')

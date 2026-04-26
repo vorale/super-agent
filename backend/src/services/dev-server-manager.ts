@@ -58,12 +58,22 @@ class DevServerManager {
       throw new Error(`No package.json found in workspace (searched: ${appCandidate.relativePath})`);
     }
 
-    // npm install if needed
+    // npm install if needed.
+    // Check for node_modules/.package-lock.json as a more reliable indicator
+    // that npm install has completed (an empty node_modules dir can exist from
+    // S3 sync or partial installs).
     const nmPath = join(appRoot, 'node_modules');
+    const nmLockPath = join(appRoot, 'node_modules', '.package-lock.json');
+    let needsInstall = false;
     try {
-      await access(nmPath);
+      await access(nmLockPath);
     } catch {
-      await this.runCommand('npm', ['install'], appRoot);
+      needsInstall = true;
+    }
+
+    if (needsInstall) {
+      console.log(`[DevServerManager] Running npm install in ${appRoot}`);
+      await this.runCommand('npm', ['install'], appRoot, { NODE_ENV: 'development' });
     }
 
     const port = await this.findFreePort();
@@ -190,12 +200,18 @@ class DevServerManager {
     });
   }
 
-  private runCommand(cmd: string, args: string[], cwd: string): Promise<void> {
+  private runCommand(cmd: string, args: string[], cwd: string, envOverrides?: Record<string, string>): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(cmd, args, { cwd, stdio: 'pipe' });
+      const proc = spawn(cmd, args, {
+        cwd,
+        stdio: 'pipe',
+        env: envOverrides ? { ...process.env, ...envOverrides } : undefined,
+      });
+      let stderr = '';
+      proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       proc.on('exit', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`${cmd} ${args.join(' ')} exited with code ${code}`));
+        else reject(new Error(`${cmd} ${args.join(' ')} exited with code ${code}${stderr ? ': ' + stderr.slice(0, 500) : ''}`));
       });
       proc.on('error', reject);
     });

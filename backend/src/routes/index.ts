@@ -68,6 +68,9 @@ import { tokenUsageRoutes } from './token-usage.routes.js';
 import { showcaseRoutes } from './showcase.routes.js';
 import { llmProxyRoutes } from './llm-proxy.routes.js';
 import { connectorRoutes } from './connectors.routes.js';
+import { supportRoutes, supportSettingsRoutes, supportKnowledgeRoutes } from './support.routes.js';
+import { widgetRoutes } from './widget.routes.js';
+import { litellmRoutes } from './litellm.routes.js';
 
 /**
  * Register all API routes on the Fastify instance.
@@ -240,6 +243,25 @@ export async function registerRoutes(fastify: FastifyInstance): Promise<void> {
   await fastify.register(connectorRoutes, { prefix: '/api/data-connectors' });
 
   // ============================================================================
+  // Customer Service Module Routes
+  // ============================================================================
+
+  // Support Workspace Routes (conversations, customers, FAQ)
+  await fastify.register(supportRoutes, { prefix: '/api/support' });
+
+  // Support Settings Routes (agent groups, escalation rules, templates, business hours)
+  await fastify.register(supportSettingsRoutes, { prefix: '/api/support/settings' });
+
+  // Support Knowledge Routes (drafts, distillation, gap reports)
+  await fastify.register(supportKnowledgeRoutes, { prefix: '/api/support/knowledge' });
+
+  // Widget External API (API Key authentication, no JWT)
+  await fastify.register(widgetRoutes, { prefix: '/api/v1/widget' });
+
+  // LiteLLM Model Proxy
+  await fastify.register(litellmRoutes, { prefix: '/api/litellm' });
+
+  // ============================================================================
   // LLM Proxy Routes (OpenAI-compatible, API Key Authentication)
   // ============================================================================
 
@@ -283,4 +305,8 @@ export {
   imChannelAdminRoutes,
   imWebhookRoutes,
   scopeMemoryRoutes,
+  supportRoutes,
+  supportSettingsRoutes,
+  supportKnowledgeRoutes,
+  widgetRoutes,
 };

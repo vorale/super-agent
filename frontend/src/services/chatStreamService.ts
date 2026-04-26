@@ -58,11 +58,21 @@ export interface AssistantEvent {
   speakerAgentAvatar?: string | null;
 }
 
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  total_cost_usd?: number;
+}
+
 export interface ResultEvent {
   type: 'result';
   session_id: string;
   duration_ms?: number;
   num_turns?: number;
+  model?: string;
+  token_usage?: TokenUsage;
 }
 
 export interface HeartbeatEvent {
@@ -120,6 +130,7 @@ export interface StreamChatOptions {
   mentionAgentId?: string;
   message: string;
   sessionId?: string;
+  model?: string;
   context?: Record<string, unknown>;
 }
 
@@ -256,6 +267,8 @@ export function parseSSEData(data: string, eventName?: string): ChatStreamEvent 
             session_id: parsed.session_id ?? '',
             duration_ms: parsed.duration_ms,
             num_turns: parsed.num_turns,
+            model: parsed.model,
+            token_usage: parsed.token_usage,
           } satisfies ResultEvent;
 
         case 'heartbeat':
@@ -363,6 +376,9 @@ export function streamChat(
       }
       if (options.context) {
         body.context = options.context;
+      }
+      if (options.model) {
+        body.model = options.model;
       }
 
       const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {

@@ -2,7 +2,7 @@
 export * from './canvas'
 
 // Navigation Types
-export type NavigationPage = 'dashboard' | 'chat' | 'workflow' | 'agents' | 'projects' | 'tools' | 'apps' | 'starred'
+export type NavigationPage = 'dashboard' | 'chat' | 'workflow' | 'agents' | 'projects' | 'tools' | 'apps' | 'starred' | 'support'
 
 export interface NavItem {
   id: NavigationPage
@@ -26,7 +26,7 @@ export interface AgentMetrics {
 }
 
 export interface ModelConfig {
-  provider: 'Bedrock' | 'OpenAI' | 'Azure'
+  provider: 'Bedrock' | 'OpenAI' | 'Azure' | 'LiteLLM'
   modelId: string
   agentType: 'Orchestrator' | 'Worker' | 'Supervisor'
 }
@@ -86,6 +86,16 @@ export interface Message {
   /** Sub-agent speaker identity — set when the message originates from a sub-agent */
   speakerAgentName?: string
   speakerAgentAvatar?: string | null
+  /** Model ID used for this response (e.g. claude-sonnet-4-20250514) */
+  model?: string
+  /** Token usage stats from the result event */
+  tokenUsage?: {
+    input_tokens: number
+    output_tokens: number
+    cache_read_input_tokens?: number
+    cache_creation_input_tokens?: number
+    total_cost_usd?: number
+  }
 }
 
 export interface ContextMemory {

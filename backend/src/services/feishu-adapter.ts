@@ -133,6 +133,7 @@ export class FeishuAdapter implements IMAdapter {
       threadId: payload.event.message.root_id || payload.event.message.message_id,
       userId: payload.event.sender?.sender_id?.open_id || 'unknown',
       text: text.trim(),
+      isExplicitThread: !!payload.event.message.root_id,
     };
   }
 
@@ -279,6 +280,7 @@ export class FeishuAdapter implements IMAdapter {
               userId: event.sender?.sender_id?.open_id || 'unknown',
               text: text.trim(),
               bindingId: bindingId,
+              isExplicitThread: !!event.message.root_id,
             };
 
             await imQueueService.enqueue(normalized, {

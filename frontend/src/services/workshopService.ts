@@ -59,6 +59,10 @@ export async function getSuggestions(agentId: string): Promise<MarketplaceSugges
   return res.data;
 }
 
+export async function resetWorkshopSession(agentId: string): Promise<void> {
+  await restClient.post(`/api/agents/${agentId}/workshop/reset`, {});
+}
+
 export async function getInstalledSkills(agentId: string): Promise<EquippedSkill[]> {
   const res = await restClient.get<{ data: EquippedSkill[] }>(
     `/api/agents/${agentId}/workshop/installed`,
@@ -122,9 +126,15 @@ export function streamWorkshopChat(
   agentId: string,
   message: string,
   sessionId?: string,
+  systemPromptOverride?: string,
 ): { reader: Promise<ReadableStreamDefaultReader<Uint8Array>>; abort: () => void } {
   const controller = new AbortController();
   const token = getAuthToken();
+
+  const body: Record<string, unknown> = { message, sessionId };
+  if (systemPromptOverride) {
+    body.systemPromptOverride = systemPromptOverride;
+  }
 
   const readerPromise = fetch(`${API_BASE_URL}/api/agents/${agentId}/workshop/chat`, {
     method: 'POST',
@@ -132,7 +142,7 @@ export function streamWorkshopChat(
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ message, sessionId }),
+    body: JSON.stringify(body),
     signal: controller.signal,
   }).then(res => {
     if (!res.ok) throw new Error(`Workshop chat failed: ${res.status}`);

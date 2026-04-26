@@ -15,6 +15,7 @@ import { discordAdapter, DiscordAdapter } from '../services/discord-adapter.js';
 import { feishuAdapter, FeishuAdapter } from '../services/feishu-adapter.js';
 import { dingtalkAdapter } from '../services/dingtalk-adapter.js';
 import { whatsappAdapter, WhatsAppAdapter } from '../services/whatsapp-adapter.js';
+import { wecomAdapter, WeComAgentCrypto } from '../services/wecom-adapter.js';
 import { imQueueService } from '../services/im-queue.service.js';
 
 // Register adapters on import
@@ -24,6 +25,7 @@ imService.registerAdapter('discord', discordAdapter);
 imService.registerAdapter('feishu', feishuAdapter);
 imService.registerAdapter('dingtalk', dingtalkAdapter);
 imService.registerAdapter('whatsapp', whatsappAdapter);
+imService.registerAdapter('wecom', wecomAdapter);
 
 // ============================================================================
 // Admin Routes — Manage IM channel bindings (requires auth)
@@ -133,6 +135,13 @@ export async function imChannelAdminRoutes(fastify: FastifyInstance): Promise<vo
         return reply.status(404).send({ error: 'Binding not found', code: 'NOT_FOUND' });
       }
 
+      // Hot-reload: reconnect gateway if the binding has a live connection
+      // (e.g. WeCom Bot WS, DingTalk Stream, Discord Gateway, Feishu WSClient).
+      // For webhook-only adapters this is a no-op.
+      void imService.reconnectBinding(updated).catch(err => {
+        console.error(`[IM] Background reconnect failed for ${bindingId}:`, err instanceof Error ? err.message : err);
+      });
+
       return reply.status(200).send({
         data: { ...updated, bot_token_enc: updated.bot_token_enc ? '***' : null },
       });
@@ -144,10 +153,23 @@ export async function imChannelAdminRoutes(fastify: FastifyInstance): Promise<vo
     '/:scopeId/im-channels/:bindingId',
     { preHandler: [authenticate] },
     async (request: FastifyRequest<BindingParam>, reply: FastifyReply) => {
+      // Look up binding before deleting so we can tear down its gateway connection
+      const binding = await imChannelRepository.findById(request.params.bindingId, request.user!.orgId);
+      if (!binding) {
+        return reply.status(404).send({ error: 'Binding not found', code: 'NOT_FOUND' });
+      }
+
       const deleted = await imChannelRepository.delete(request.params.bindingId, request.user!.orgId);
       if (!deleted) {
         return reply.status(404).send({ error: 'Binding not found', code: 'NOT_FOUND' });
       }
+
+      // Tear down gateway connection if any
+      const adapter = imService.getAdapter(binding.channel_type);
+      if (adapter?.removeBot) {
+        adapter.removeBot(binding.id);
+      }
+
       return reply.status(204).send();
     },
   );
@@ -254,6 +276,15 @@ export async function imWebhookRoutes(fastify: FastifyInstance): Promise<void> {
       } catch (err) {
         done(err as Error, undefined);
       }
+    },
+  );
+
+  // WeCom Agent mode sends XML bodies — parse as raw string
+  fastify.addContentTypeParser(
+    ['application/xml', 'text/xml'],
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      done(null, body as string);
     },
   );
 
@@ -451,6 +482,154 @@ export async function imWebhookRoutes(fastify: FastifyInstance): Promise<void> {
         try {
           await dingtalkAdapter.sendReply(result.binding, msg.threadId, '⚠ 消息处理失败，请稍后重试');
         } catch { /* best effort */ }
+      }
+    },
+  );
+
+  // ==========================================================================
+  // WeCom (企业微信) Routes
+  // ==========================================================================
+
+  /**
+   * GET /api/im/wecom/callback — WeCom Agent mode URL verification.
+   *
+   * When configuring the callback URL in WeCom admin console, WeCom sends
+   * a GET request with msg_signature, timestamp, nonce, and echostr.
+   * We decrypt echostr and echo back the plaintext to prove ownership.
+   */
+  fastify.get<{
+    Querystring: { msg_signature?: string; timestamp?: string; nonce?: string; echostr?: string };
+  }>(
+    '/wecom/callback',
+    async (request, reply) => {
+      const { msg_signature, timestamp, nonce, echostr } = request.query;
+
+      if (!msg_signature || !timestamp || !nonce || !echostr) {
+        return reply.status(400).send('Missing verification parameters');
+      }
+
+      // Find a WeCom binding whose token + encodingAESKey can verify this signature
+      const { prisma } = await import('../config/database.js');
+      const bindings = await prisma.im_channel_bindings.findMany({
+        where: { channel_type: 'wecom', is_enabled: true },
+      });
+
+      for (const b of bindings) {
+        const cfg = (b.config as Record<string, string>) ?? {};
+        const token = cfg.token;
+        const encodingAESKey = cfg.encoding_aes_key;
+        if (!token || !encodingAESKey) continue;
+
+        if (WeComAgentCrypto.verifySignature(token, timestamp, nonce, echostr, msg_signature)) {
+          try {
+            const plaintext = WeComAgentCrypto.decrypt(encodingAESKey, echostr);
+            console.log(`[WECOM] Agent callback URL verified for binding ${b.id}`);
+            return reply.status(200).type('text/plain').send(plaintext);
+          } catch (err) {
+            console.error(`[WECOM] Decrypt echostr failed for binding ${b.id}:`, err instanceof Error ? err.message : err);
+          }
+        }
+      }
+
+      console.warn('[WECOM] Agent callback verification: no binding matches signature');
+      return reply.status(401).send('Signature verification failed');
+    },
+  );
+
+  /**
+   * POST /api/im/wecom/callback — WeCom Agent mode message callback.
+   *
+   * Receives XML-encrypted messages from WeCom. The flow:
+   * 1. Extract <Encrypt> from XML body
+   * 2. Find binding by verifying signature against all WeCom bindings
+   * 3. Decrypt the message
+   * 4. Parse XML → NormalizedIMMessage
+   * 5. Enqueue for async processing
+   */
+  fastify.post<{
+    Querystring: { msg_signature?: string; timestamp?: string; nonce?: string };
+  }>(
+    '/wecom/callback',
+    async (request: FastifyRequest<{ Querystring: { msg_signature?: string; timestamp?: string; nonce?: string } }>, reply: FastifyReply) => {
+      const { msg_signature, timestamp, nonce } = request.query;
+
+      if (!msg_signature || !timestamp || !nonce) {
+        return reply.status(400).send('Missing signature parameters');
+      }
+
+      const rawBody = typeof request.body === 'string' ? request.body : JSON.stringify(request.body);
+
+      // Extract <Encrypt> from the XML body
+      let encrypted = '';
+      try {
+        if (typeof request.body === 'string') {
+          // Raw XML string (from XML content type parser)
+          encrypted = WeComAgentCrypto.extractEncrypt(request.body);
+        } else {
+          // JSON-parsed body — try to extract Encrypt field
+          const bodyObj = request.body as Record<string, any>;
+          if (bodyObj.xml?.Encrypt || bodyObj.Encrypt) {
+            encrypted = String(bodyObj.xml?.Encrypt || bodyObj.Encrypt);
+          } else {
+            encrypted = WeComAgentCrypto.extractEncrypt(rawBody);
+          }
+        }
+      } catch {
+        return reply.status(400).send('Invalid XML: missing Encrypt field');
+      }
+
+      // Find matching binding by signature verification
+      const { prisma } = await import('../config/database.js');
+      const bindings = await prisma.im_channel_bindings.findMany({
+        where: { channel_type: 'wecom', is_enabled: true },
+      });
+
+      let matchedBinding: typeof bindings[0] | null = null;
+      let decryptedXml = '';
+
+      for (const b of bindings) {
+        const cfg = (b.config as Record<string, string>) ?? {};
+        const token = cfg.token;
+        const encodingAESKey = cfg.encoding_aes_key;
+        if (!token || !encodingAESKey) continue;
+
+        if (WeComAgentCrypto.verifySignature(token, timestamp, nonce, encrypted, msg_signature)) {
+          try {
+            decryptedXml = WeComAgentCrypto.decrypt(encodingAESKey, encrypted);
+            matchedBinding = b;
+            break;
+          } catch (err) {
+            console.error(`[WECOM] Decrypt failed for binding ${b.id}:`, err instanceof Error ? err.message : err);
+          }
+        }
+      }
+
+      if (!matchedBinding || !decryptedXml) {
+        console.warn('[WECOM] Agent callback: no binding matches signature');
+        return reply.status(401).send('Signature verification failed');
+      }
+
+      // Acknowledge immediately — WeCom expects a response within 5 seconds
+      reply.status(200).send('success');
+
+      // Parse and enqueue
+      try {
+        const msg = wecomAdapter.parseEvent({
+          decryptedXml,
+          corpId: (matchedBinding.config as Record<string, string>)?.corp_id || '',
+          bindingId: matchedBinding.id,
+        });
+
+        if (msg) {
+          const fields = WeComAgentCrypto.parseXml(decryptedXml);
+          await imQueueService.enqueue(msg, {
+            wecomFromUser: fields.FromUserName || msg.userId,
+            wecomChatType: 'single', // Agent mode is typically single chat
+            wecomAgentMode: true,
+          });
+        }
+      } catch (error) {
+        console.error('[WECOM] Failed to process Agent callback:', error instanceof Error ? error.message : error);
       }
     },
   );

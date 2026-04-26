@@ -8,6 +8,7 @@ import {
   Rocket,
   FolderKanban,
   Star,
+  Headphones,
 } from 'lucide-react'
 import type { NavigationPage } from '@/types'
 import { useTranslation } from '@/i18n'
@@ -63,6 +64,12 @@ const navItems: NavItemConfig[] = [
     path: '/apps',
   },
   {
+    id: 'support',
+    icon: <Headphones className="w-5 h-5" />,
+    tooltipKey: 'nav.support',
+    path: '/support',
+  },
+  {
     id: 'starred',
     icon: <Star className="w-5 h-5" />,
     tooltipKey: 'nav.starred',
@@ -89,6 +96,7 @@ export function Sidebar({ onAvatarClick, isAdminMenuOpen }: SidebarProps) {
     if (path.startsWith('/projects')) return 'projects'
     if (path.startsWith('/tools')) return 'tools'
     if (path.startsWith('/apps')) return 'apps'
+    if (path.startsWith('/support')) return 'support'
     if (path.startsWith('/starred') || path.startsWith('/showcase')) return 'starred'
     return 'dashboard'
   }

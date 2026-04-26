@@ -13,6 +13,10 @@ import { skillRepository } from '../repositories/skill.repository.js';
 
 export interface WorkflowWorkspaceResult {
   workspacePath: string;
+  /** The session ID used for workspace provisioning (for S3 sync and later retrieval) */
+  sessionId: string;
+  /** The scope ID used for workspace path construction */
+  scopeId: string;
   agents: Array<{ id: string; name: string; displayName: string; role: string | null }>;
   skills: SkillForWorkspace[];
   scopeSkillNames: string[];
@@ -23,10 +27,16 @@ export interface WorkflowWorkspaceResult {
  *
  * Loads scope data, agents with their skills, scope-level skills,
  * and creates a session workspace with all resources available.
+ *
+ * @param organizationId - Organization ID
+ * @param scopeId - Business scope ID
+ * @param sessionId - Optional session ID for workspace. If provided, the workspace
+ *   can be retrieved later (e.g. using executionId). Defaults to a random UUID.
  */
 export async function provisionWorkflowWorkspace(
   organizationId: string,
   scopeId: string,
+  sessionId?: string,
 ): Promise<WorkflowWorkspaceResult> {
   // Load scope
   const scope = await businessScopeService.getBusinessScopeById(scopeId, organizationId);
@@ -69,8 +79,8 @@ export async function provisionWorkflowWorkspace(
     }
   }
 
-  // Provision workspace
-  const sessionId = crypto.randomUUID();
+  // Provision workspace — use provided sessionId or generate a random one
+  const effectiveSessionId = sessionId ?? crypto.randomUUID();
   const scopeForWorkspace: ScopeForWorkspace = {
     id: scope.id,
     name: scope.name,
@@ -90,11 +100,13 @@ export async function provisionWorkflowWorkspace(
   };
 
   const { workspacePath } = await workspaceManager.ensureSessionWorkspace(
-    organizationId, sessionId, scopeForWorkspace, null,
+    organizationId, effectiveSessionId, scopeForWorkspace, null,
   );
 
   return {
     workspacePath,
+    sessionId: effectiveSessionId,
+    scopeId: scope.id,
     agents: agents.map(a => ({ id: a.id, name: a.name, displayName: a.display_name, role: a.role })),
     skills: Array.from(skillMap.values()),
     scopeSkillNames: scopeLevelSkills.map(s => s.name),

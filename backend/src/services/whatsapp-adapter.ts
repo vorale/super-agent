@@ -116,6 +116,7 @@ export class WhatsAppAdapter implements IMAdapter {
             userId: waMsg.from,
             userName: contactMap.get(waMsg.from) || waMsg.from,
             text: waMsg.text.body.trim(),
+            isExplicitThread: false, // WhatsApp has no thread concept
           };
         }
       }
@@ -157,6 +158,7 @@ export class WhatsAppAdapter implements IMAdapter {
             userId: waMsg.from,
             userName: contactMap.get(waMsg.from) || waMsg.from,
             text: waMsg.text.body.trim(),
+            isExplicitThread: false, // WhatsApp has no thread concept
           });
         }
       }

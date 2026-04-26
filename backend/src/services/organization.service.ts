@@ -381,6 +381,22 @@ export class OrganizationService {
       throw AppError.notFound(`Membership with ID ${id} not found`);
     }
 
+    // Enrich with profile data so the frontend receives name/email immediately
+    if (updated.user_id) {
+      const { prisma } = await import('../config/database.js');
+      const profile = await prisma.profiles.findUnique({
+        where: { id: updated.user_id },
+        select: { username: true, full_name: true },
+      });
+      if (profile) {
+        return {
+          ...updated,
+          email: profile.username ?? (updated as any).invited_email ?? null,
+          name: profile.full_name ?? null,
+        };
+      }
+    }
+
     return updated;
   }
 

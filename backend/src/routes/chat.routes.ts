@@ -129,6 +129,35 @@ function buildTreeFromEntries(
   return mapToNodes(root, '');
 }
 
+// ---------------------------------------------------------------------------
+// Workspace file-tree cache (TTL-based, avoids hitting AgentCore/S3 on every poll)
+// ---------------------------------------------------------------------------
+interface WorkspaceCacheEntry {
+  data: import('../services/workspace-manager.js').WorkspaceFileNode[];
+  workspacePath: string | null;
+  expiresAt: number;
+}
+const workspaceFileCache = new Map<string, WorkspaceCacheEntry>();
+const WORKSPACE_CACHE_TTL_MS = 15_000; // 15 seconds
+
+function getCachedWorkspaceFiles(sessionId: string): WorkspaceCacheEntry | null {
+  const entry = workspaceFileCache.get(sessionId);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    workspaceFileCache.delete(sessionId);
+    return null;
+  }
+  return entry;
+}
+
+function setCachedWorkspaceFiles(sessionId: string, data: WorkspaceCacheEntry['data'], workspacePath: string | null): void {
+  workspaceFileCache.set(sessionId, {
+    data,
+    workspacePath,
+    expiresAt: Date.now() + WORKSPACE_CACHE_TTL_MS,
+  });
+}
+
 /**
  * Register chat routes on the Fastify instance.
  * All routes require authentication and filter by organization_id.
@@ -156,6 +185,7 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
             mention_agent_id: { type: 'string', format: 'uuid' },
             session_id: { type: 'string', format: 'uuid' },
             message: { type: 'string', minLength: 1 },
+            model: { type: 'string' },
             context: { type: 'object' },
           },
         },
@@ -189,6 +219,7 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         mentionAgentId: data.mention_agent_id,
         sessionId: data.session_id,
         message: data.message,
+        model: data.model,
         context: data.context,
       });
     }
@@ -791,6 +822,13 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
     },
     async (request, reply) => {
       const { id } = validateSchema(idParamSchema, request.params);
+
+      // Check cache first — avoids hitting AgentCore/S3 on every 5s poll
+      const cached = getCachedWorkspaceFiles(id);
+      if (cached) {
+        return reply.status(200).send({ files: cached.data, workspacePath: cached.workspacePath });
+      }
+
       const session = await chatService.getSessionById(id, request.user!.orgId);
 
       const context = session.context as Record<string, unknown> | null;
@@ -806,13 +844,30 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         const { config: appConfig } = await import('../config/index.js');
         let files;
         if (appConfig.agentRuntime === 'agentcore') {
-          // Use InvokeAgentRuntimeCommandCommand to query container directly
+          // Local-first strategy: return local workspace instantly if available,
+          // then let subsequent polls pick up the authoritative AgentCore/S3 data.
+          const localFiles = await workspaceManager.listWorkspaceFiles(
+            request.user!.orgId,
+            scopeIdForPath,
+            session.id,
+          );
+
+          if (localFiles && localFiles.length > 0) {
+            // Local workspace exists — return immediately with a short cache TTL.
+            // The next poll (after cache expires) will try AgentCore for fresh data.
+            const wsPath = workspaceManager.getSessionWorkspacePath(
+              request.user!.orgId, scopeIdForPath, session.id,
+            );
+            setCachedWorkspaceFiles(id, localFiles, wsPath);
+            return reply.status(200).send({ files: localFiles, workspacePath: wsPath });
+          }
+
+          // No local workspace — try AgentCore container, then S3
           try {
             const entries = await agentCoreCommandService.listWorkspaceFiles(session.id);
             files = buildTreeFromEntries(entries);
           } catch (cmdErr) {
             // Expected when session has no active microVM (idle >15min or no messages yet).
-            // Silently fall back to S3.
             files = await workspaceManager.listWorkspaceFilesFromS3(
               request.user!.orgId,
               scopeIdForPath,
@@ -827,11 +882,18 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
           );
         }
 
+        const wsPath = files ? workspaceManager.getSessionWorkspacePath(
+          request.user!.orgId, scopeIdForPath, session.id,
+        ) : null;
+
+        // Cache the result
+        if (files) {
+          setCachedWorkspaceFiles(id, files, wsPath);
+        }
+
         return reply.status(200).send({
           files: files ?? [],
-          workspacePath: files ? workspaceManager.getSessionWorkspacePath(
-            request.user!.orgId, scopeIdForPath, session.id,
-          ) : null,
+          workspacePath: wsPath,
         });
       } catch (err) {
         console.warn(`[workspace] Failed to list files for session ${id}:`, err instanceof Error ? err.message : err);
@@ -1376,6 +1438,67 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * POST /api/chat/sessions/:id/workspace/upload-file
+   * Upload a file via multipart/form-data to the session workspace.
+   * Supports large files (up to 100MB) without base64 overhead.
+   */
+  fastify.post<{ Params: { id: string } }>(
+    '/sessions/:id/workspace/upload-file',
+    {
+      preHandler: [authenticate],
+      schema: {
+        description: 'Upload a file via multipart/form-data to the session workspace',
+        tags: ['Chat'],
+        security: [{ bearerAuth: [] }],
+        params: {
+          type: 'object',
+          required: ['id'],
+          properties: { id: { type: 'string', format: 'uuid' } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = validateSchema(idParamSchema, request.params);
+      const session = await chatService.getSessionById(id, request.user!.orgId);
+
+      if (!session.business_scope_id) {
+        return reply.status(404).send({ error: 'No workspace for this session' });
+      }
+
+      const data = await request.file();
+      if (!data) {
+        return reply.status(400).send({ error: 'No file provided' });
+      }
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of data.file) {
+        chunks.push(chunk);
+      }
+
+      if (data.file.truncated) {
+        return reply.status(413).send({ error: 'File too large. Maximum size is 100MB.' });
+      }
+
+      const buffer = Buffer.concat(chunks);
+      const fileName = data.filename;
+
+      const ok = await workspaceManager.writeWorkspaceFileRaw(
+        request.user!.orgId,
+        session.business_scope_id,
+        session.id,
+        fileName,
+        buffer,
+      );
+
+      if (!ok) {
+        return reply.status(400).send({ error: 'Failed to upload file' });
+      }
+
+      return reply.status(200).send({ path: fileName, uploaded: true });
+    },
+  );
+
+  /**
    * POST /api/chat/quick-questions
    * Generate LLM-powered contextual quick questions based on business scope and conversation.
    */
@@ -1485,6 +1608,22 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         session.business_scope_id,
         session.id,
       );
+
+      // In agentcore mode, ensure local workspace is synced from S3 before
+      // starting the dev server. The container writes files to S3 and the
+      // sync-back to local is fire-and-forget, so files may not be present yet.
+      const { config: appConfig } = await import('../config/index.js');
+      if (appConfig.agentRuntime === 'agentcore') {
+        try {
+          await workspaceManager.ensureS3SyncedToLocal(
+            request.user!.orgId,
+            session.business_scope_id,
+            session.id,
+          );
+        } catch (err) {
+          console.warn(`[preview] S3 sync failed for session ${id}:`, err instanceof Error ? err.message : err);
+        }
+      }
 
       try {
         const port = await devServerManager.ensureDevServer(session.id, workspacePath);
@@ -1625,6 +1764,17 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         return reply.status(200).send({ apps: [] });
       }
 
+      // In agentcore mode, the local workspace is a cache that gets synced
+      // from S3 in the background after each agent invocation (fire-and-forget
+      // in runConversation). We skip the blocking S3 sync here because:
+      //   1. detect-apps only needs to know IF an app exists (folder structure),
+      //      not whether file contents are up-to-date.
+      //   2. The publish-from-workspace endpoint does its own ensureS3SyncedToLocal
+      //      before actually copying the bundle, so freshness is guaranteed at
+      //      publish/preview time.
+      //   3. Blocking here adds seconds of latency to every detect-apps call,
+      //      making the app-detector bar feel sluggish after each agent response.
+
       const wsPath = workspaceManager.getSessionWorkspacePath(
         request.user!.orgId,
         session.business_scope_id,
@@ -1676,7 +1826,7 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
         try {
           const entries = await readdir(basePath, { withFileTypes: true });
           for (const entry of entries) {
-            if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+            if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'dist' || entry.name === 'build') continue;
             const dirPath = join(basePath, entry.name);
             const relFolder = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
             const candidates = ['dist/index.html', 'build/index.html', 'index.html'];
@@ -1725,27 +1875,35 @@ export async function chatRoutes(fastify: FastifyInstance): Promise<void> {
       });
 
       // Build maps from source_folder → app record
-      const publishedMap = new Map<string, { id: string; published_at: Date | null; version: string }>();
-      const previewMap = new Map<string, string>();
+      const publishedMap = new Map<string, { id: string; published_at: Date | null; version: string; name: string }>();
+      const previewMap = new Map<string, { id: string; name: string }>();
       for (const pa of knownApps) {
         const meta = pa.metadata as Record<string, unknown> | null;
         const srcFolder = meta?.source_folder as string | undefined;
         if (!srcFolder) continue;
         if (pa.status === 'published') {
-          publishedMap.set(srcFolder, { id: pa.id, published_at: pa.published_at, version: pa.version });
+          publishedMap.set(srcFolder, { id: pa.id, published_at: pa.published_at, version: pa.version, name: pa.name });
         } else if (pa.status === 'preview') {
-          previewMap.set(srcFolder, pa.id);
+          previewMap.set(srcFolder, { id: pa.id, name: pa.name });
         }
       }
 
-      // Enrich detected apps with published/preview status
+      // Enrich detected apps with published/preview status.
+      // Use the DB name (set by user during publish) over the package.json name
+      // so that user-edited names survive page refreshes.
       for (const app of apps) {
         const folder = app.folder === '.' ? '.' : app.folder;
         const pubMatch = publishedMap.get(folder);
         app.publishedAppId = pubMatch?.id || null;
         app.publishedAt = pubMatch?.published_at?.toISOString() || null;
         app.publishedVersion = pubMatch?.version || null;
-        app.previewAppId = previewMap.get(folder) || null;
+        app.previewAppId = previewMap.get(folder)?.id || null;
+
+        // Prefer the user-edited name from the most recent publish/preview
+        const dbName = pubMatch?.name || previewMap.get(folder)?.name;
+        if (dbName) {
+          app.name = dbName;
+        }
       }
 
       return reply.status(200).send({ apps });

@@ -2298,6 +2298,14 @@ export const translations: TranslationData = {
     en: 'Node Execution Log',
     cn: '节点执行日志'
   },
+  'execution.logs': {
+    en: 'Logs',
+    cn: '日志'
+  },
+  'execution.workspace': {
+    en: 'Workspace',
+    cn: '工作区'
+  },
   'execution.output': {
     en: 'Output',
     cn: '输出'
@@ -2502,6 +2510,14 @@ export const translations: TranslationData = {
   },
   'agentList.digitalTwin': {
     en: 'Digital Twin',
+    cn: '数字分身'
+  },
+  'agentList.viewScope': {
+    en: 'View',
+    cn: '查看'
+  },
+  'agentList.digitalTwins': {
+    en: 'Digital Twins',
     cn: '数字分身'
   },
 
@@ -3259,8 +3275,8 @@ export const translations: TranslationData = {
     cn: '添加渠道'
   },
   'im.connectDesc': {
-    en: 'Connect messaging platforms so users can chat with {name} via Slack, Discord, etc.',
-    cn: '连接消息平台，让用户可以通过 Slack、Discord 等与 {name} 对话。'
+    en: 'Connect messaging platforms so users can chat with {name} via Slack, Discord, WeCom, etc.',
+    cn: '连接消息平台，让用户可以通过 Slack、Discord、企业微信等与 {name} 对话。'
   },
   'im.dismiss': {
     en: 'Dismiss',
@@ -3623,6 +3639,10 @@ export const translations: TranslationData = {
   'scopeProfile.configured': {
     en: 'configured',
     cn: '已配置'
+  },
+  'scopeProfile.testSkill': {
+    en: 'Test',
+    cn: '测试'
   },
   'scopeProfile.configure': {
     en: 'Configure',
@@ -4067,6 +4087,7 @@ export const translations: TranslationData = {
   'chat.uploadToWorkspaceTitle': { en: 'Upload to Workspace', cn: '上传到工作区' },
   'chat.dragDropFiles': { en: 'Drag & drop files here, or', cn: '拖放文件到此处，或' },
   'chat.clickToBrowse': { en: 'click to browse', cn: '点击浏览' },
+  'chat.fileTooLarge': { en: 'File exceeds 100MB limit:', cn: '文件超过 100MB 限制：' },
   'chat.cancel': { en: 'Cancel', cn: '取消' },
   'chat.loadingScopesEllipsis': { en: 'Loading scopes...', cn: '加载范围中...' },
   'chat.selectScopeLabel': { en: 'Select scope', cn: '选择范围' },
@@ -4217,18 +4238,11 @@ export const translations: TranslationData = {
   'twin.knowledgeTip': { en: 'Tip: Upload documents that contain your domain expertise — internal docs, guides, FAQs, meeting notes. Your digital twin will use these as reference when answering questions.', cn: '提示：上传包含你领域专业知识的文档——内部文档、指南、FAQ、会议记录。你的数字分身将在回答问题时参考这些内容。' },
   'twin.skillsSubtitle': { en: 'Choose whether AI should generate skills for your digital twin', cn: '选择是否让 AI 为你的数字分身生成技能' },
   'twin.skipSkillsLabel': { en: 'Skip skill generation', cn: '跳过技能生成' },
-  'twin.skipSkillsDesc': { en: 'Create the digital twin without any skills — you can add them later', cn: '不生成技能创建数字分身——稍后可以添加' },
-  'twin.noSkillsGenerated': { en: 'No skills will be generated', cn: '不会生成技能' },
-  'twin.skillsWillGenerate': { en: 'AI will generate skills based on your role & documents', cn: 'AI 将根据你的角色和文档生成技能' },
   'twin.skipSkillsHint': { en: 'You can open the Skill Workshop later to browse and equip skills, connect MCP servers, and fine-tune capabilities.', cn: '稍后可以打开技能工坊浏览和装备技能、连接 MCP 服务器并微调能力。' },
   'twin.generateSkillsHint': { en: 'During creation, AI will analyze your role and uploaded documents to generate 3–6 domain-specific skills. You can also add more skills later from the Skill Workshop.', cn: '创建过程中，AI 将分析你的角色和上传的文档，生成 3-6 个领域专属技能。稍后也可以从技能工坊添加更多技能。' },
   'twin.reviewSubtitle': { en: 'Review your digital twin and click Create', cn: '审核你的数字分身并点击创建' },
   'twin.summaryLabel': { en: 'Summary', cn: '摘要' },
-  'twin.unnamed': { en: 'Unnamed', cn: '未命名' },
-  'twin.noRole': { en: 'No role set', cn: '未设置角色' },
   'twin.summaryLine': { en: '{docs} document(s) • {skills} • Platform', cn: '{docs} 个文档 • {skills} • 平台' },
-  'twin.noSkills': { en: 'No skills', cn: '无技能' },
-  'twin.aiGeneratedSkills': { en: 'AI-generated skills', cn: 'AI 生成的技能' },
   'twin.savingTwin': { en: 'Saving...', cn: '保存中...' },
   'twin.creatingTitle': { en: 'Creating {name}\'s Digital Twin', cn: '正在创建 {name} 的数字分身' },
   'twin.generatingConfig': { en: 'AI is generating your digital twin configuration...', cn: '正在生成数字分身配置...' },
@@ -4307,5 +4321,72 @@ export const translations: TranslationData = {
   'tools.tryAdjusting': { en: 'Try adjusting the category, source, or search query', cn: '尝试调整分类、来源或搜索词' },
   'tools.skill': { en: 'Skill', cn: '技能' },
   'tools.mcp': { en: 'MCP', cn: 'MCP' },
-  'tools.plugin': { en: 'Plugin', cn: '插件' }
+  'tools.plugin': { en: 'Plugin', cn: '插件' },
+
+  // ============================================================================
+  // Customer Service Module
+  // ============================================================================
+  'nav.support': { en: 'Support', cn: '客服' },
+  'support.workspace': { en: 'Support Workspace', cn: '客服工作台' },
+  'support.settings': { en: 'Support Settings', cn: '客服设置' },
+  'support.analytics': { en: 'Support Analytics', cn: '客服分析' },
+  'support.knowledge': { en: 'Knowledge Management', cn: '知识管理' },
+  'support.conversations': { en: 'Conversations', cn: '对话' },
+  'support.customers': { en: 'Customers', cn: '客户' },
+  'support.faq': { en: 'FAQ', cn: 'FAQ' },
+  'support.agentGroups': { en: 'Agent Groups', cn: '客服团队' },
+  'support.escalationRules': { en: 'Escalation Rules', cn: '升级规则' },
+  'support.responseTemplates': { en: 'Response Templates', cn: '快捷回复' },
+  'support.businessHours': { en: 'Business Hours', cn: '工作时间' },
+  'support.drafts': { en: 'FAQ Drafts', cn: 'FAQ 草稿' },
+  'support.gaps': { en: 'Knowledge Gaps', cn: '知识盲区' },
+  'support.autoLearn': { en: 'Auto-learn', cn: '自动学习' },
+  'support.resolve': { en: 'Resolve', cn: '解决' },
+  'support.close': { en: 'Close', cn: '关闭' },
+  'support.handoff': { en: 'Transfer to Human', cn: '转人工' },
+  'support.assign': { en: 'Assign', cn: '分配' },
+  'support.allConversations': { en: 'All', cn: '全部' },
+  'support.open': { en: 'Open', cn: '待处理' },
+  'support.pendingAgent': { en: 'Pending Agent', cn: '等待人工' },
+  'support.resolved': { en: 'Resolved', cn: '已解决' },
+  'support.closed': { en: 'Closed', cn: '已关闭' },
+  'support.noConversations': { en: 'No conversations', cn: '暂无对话' },
+  'support.selectConversation': { en: 'Select a conversation to view details', cn: '选择一个对话查看详情' },
+  'support.typeReply': { en: 'Type a reply...', cn: '输入回复...' },
+  'support.send': { en: 'Send', cn: '发送' },
+  'support.customer': { en: 'Customer', cn: '客户' },
+  'support.agent': { en: 'Agent', cn: '客服' },
+  'support.priority': { en: 'Priority', cn: '优先级' },
+  'support.channel': { en: 'Channel', cn: '渠道' },
+  'support.tags': { en: 'Tags', cn: '标签' },
+  'support.notes': { en: 'Notes', cn: '备注' },
+  'support.recentConversations': { en: 'Recent Conversations', cn: '最近对话' },
+  'support.totalConversations': { en: 'Total Conversations', cn: '总对话数' },
+  'support.aiResolvedRate': { en: 'AI Resolved Rate', cn: 'AI 解决率' },
+  'support.avgCsat': { en: 'Avg CSAT Rating', cn: '平均满意度' },
+  'support.resolutionRate': { en: 'Resolution Rate', cn: '解决率' },
+  'support.last30Days': { en: 'Last 30 days', cn: '最近30天' },
+  'support.generateGapReport': { en: 'Generate Gap Report', cn: '生成盲区报告' },
+  'support.triggerDistill': { en: 'Trigger FAQ Distillation', cn: '触发FAQ提炼' },
+  'support.distillComplete': { en: 'Distillation Complete', cn: '提炼完成' },
+  'support.conversationsProcessed': { en: 'Conversations Processed', cn: '处理对话数' },
+  'support.draftsCreated': { en: 'New Drafts Created', cn: '新建草稿数' },
+  'support.publish': { en: 'Publish', cn: '发布' },
+  'support.reject': { en: 'Reject', cn: '拒绝' },
+  'support.noDrafts': { en: 'No FAQ drafts pending review', cn: '暂无待审核的FAQ草稿' },
+  'support.problematicConversations': { en: 'Problematic Conversations', cn: '问题对话数' },
+  'support.existingFaqs': { en: 'Existing FAQs', cn: '现有FAQ数' },
+  'support.knowledgeGaps': { en: 'Knowledge Gaps', cn: '知识盲区数' },
+  'support.routingStrategy': { en: 'Routing Strategy', cn: '路由策略' },
+  'support.maxConcurrent': { en: 'Max Concurrent', cn: '最大并发' },
+  'support.members': { en: 'Members', cn: '成员' },
+  'support.active': { en: 'Active', cn: '活跃' },
+  'support.inactive': { en: 'Inactive', cn: '未激活' },
+  'support.offlineMessage': { en: 'Offline Message', cn: '离线消息' },
+  'support.timezone': { en: 'Timezone', cn: '时区' },
+  'support.shortcut': { en: 'Shortcut', cn: '快捷键' },
+  'support.category': { en: 'Category', cn: '分类' },
+  'support.conditions': { en: 'Conditions', cn: '触发条件' },
+  'support.actions': { en: 'Actions', cn: '触发动作' },
+  'support.rulePriority': { en: 'Rule Priority', cn: '规则优先级' }
 }

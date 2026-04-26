@@ -135,13 +135,15 @@ export class ProjectService {
     });
   }
 
-  async removeMember(projectId: string, targetUserId: string) {
+  async removeMember(orgId: string, projectId: string, userId: string, targetUserId: string) {
+    await this.getProject(orgId, projectId, userId); // org ownership check
     await prisma.project_members.deleteMany({
       where: { project_id: projectId, user_id: targetUserId },
     });
   }
 
-  async getMembers(projectId: string) {
+  async getMembers(orgId: string, projectId: string, userId: string) {
+    await this.getProject(orgId, projectId, userId); // org ownership check
     return prisma.project_members.findMany({
       where: { project_id: projectId },
       orderBy: { joined_at: 'asc' },
@@ -195,7 +197,8 @@ export class ProjectService {
     return issue;
   }
 
-  async listIssues(projectId: string, filters?: { status?: string; priority?: string }) {
+  async listIssues(orgId: string, projectId: string, userId: string, filters?: { status?: string; priority?: string }) {
+    await this.getProject(orgId, projectId, userId); // org ownership check
     const where: Record<string, unknown> = { project_id: projectId };
     if (filters?.status) where.status = filters.status;
     if (filters?.priority) where.priority = filters.priority;
@@ -219,17 +222,17 @@ export class ProjectService {
     }));
   }
 
-  async getIssue(projectId: string, issueId: string) {
+  async getIssue(orgId: string, projectId: string, issueId: string) {
     const issue = await prisma.project_issues.findFirst({
-      where: { id: issueId, project_id: projectId },
+      where: { id: issueId, project_id: projectId, organization_id: orgId },
       include: { comments: { orderBy: { created_at: 'asc' } }, children: true },
     });
     if (!issue) throw AppError.notFound('Issue not found');
     return issue;
   }
 
-  async updateIssue(projectId: string, issueId: string, input: Partial<CreateIssueInput>) {
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+  async updateIssue(orgId: string, projectId: string, issueId: string, input: Partial<CreateIssueInput>) {
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) throw AppError.notFound('Issue not found');
 
     // Mark analysis as stale if description changed significantly
@@ -250,11 +253,11 @@ export class ProjectService {
     return updated;
   }
 
-  async changeIssueStatus(projectId: string, issueId: string, newStatus: string) {
+  async changeIssueStatus(orgId: string, projectId: string, issueId: string, newStatus: string) {
     if (!VALID_STATUSES.includes(newStatus)) {
       throw AppError.validation(`Invalid status: ${newStatus}`);
     }
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) throw AppError.notFound('Issue not found');
 
     return prisma.project_issues.update({
@@ -263,8 +266,8 @@ export class ProjectService {
     });
   }
 
-  async reorderIssue(projectId: string, issueId: string, newSortOrder: number, newStatus?: string) {
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+  async reorderIssue(orgId: string, projectId: string, issueId: string, newSortOrder: number, newStatus?: string) {
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) throw AppError.notFound('Issue not found');
 
     const data: Record<string, unknown> = { sort_order: newSortOrder };
@@ -273,8 +276,8 @@ export class ProjectService {
     return prisma.project_issues.update({ where: { id: issueId }, data });
   }
 
-  async deleteIssue(projectId: string, issueId: string) {
-    await prisma.project_issues.deleteMany({ where: { id: issueId, project_id: projectId } });
+  async deleteIssue(orgId: string, projectId: string, issueId: string) {
+    await prisma.project_issues.deleteMany({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
   }
 
   // --- Comments ---
@@ -292,9 +295,11 @@ export class ProjectService {
     });
   }
 
-  async listComments(issueId: string) {
+  async listComments(orgId: string, projectId: string, issueId: string) {
+    // Verify issue belongs to org via project
+    await this.getIssue(orgId, projectId, issueId);
     return prisma.project_issue_comments.findMany({
-      where: { issue_id: issueId },
+      where: { issue_id: issueId, organization_id: orgId },
       orderBy: { created_at: 'asc' },
     });
   }
@@ -310,15 +315,15 @@ export class ProjectService {
     // Prevent double-execution of the same issue
     if (this.executingIssues.has(issueId)) {
       console.log(`[ProjectService] Issue ${issueId} is already being executed, skipping`);
-      const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+      const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
       return { issue, session_id: issue?.workspace_session_id, branch_name: issue?.branch_name };
     }
 
     console.log(`[ProjectService] executeIssue called: projectId=${projectId}, issueId=${issueId}, userId=${userId}`);
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) throw AppError.notFound('Issue not found');
 
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project) throw AppError.notFound('Project not found');
 
     console.log(`[ProjectService] Project agent_id=${project.agent_id}, business_scope_id=${project.business_scope_id}`);
@@ -565,7 +570,7 @@ export class ProjectService {
    * This session is the persistent workspace for the project's agent.
    */
   async ensureWorkspaceSession(orgId: string, projectId: string, userId: string): Promise<string> {
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project) throw AppError.notFound('Project not found');
 
     if (project.workspace_session_id) {
@@ -621,10 +626,10 @@ export class ProjectService {
    * Sends a message through the project's chat session so the agent has full context.
    */
   async beautifyDescription(orgId: string, projectId: string, issueId: string, userId: string): Promise<string> {
-    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId } });
+    const issue = await prisma.project_issues.findFirst({ where: { id: issueId, project_id: projectId, organization_id: orgId } });
     if (!issue) throw AppError.notFound('Issue not found');
 
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project) throw AppError.notFound('Project not found');
 
     // Ensure workspace session exists
@@ -681,7 +686,7 @@ ${project.repo_url ? `Repository: ${project.repo_url}` : ''}`;
    * Useful after AgentCore container has written files that need to be visible locally.
    */
   async syncWorkspaceFromS3(orgId: string, projectId: string, userId: string): Promise<{ synced: number; path: string }> {
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project) throw AppError.notFound('Project not found');
     if (!project.workspace_session_id) throw AppError.validation('No workspace session exists for this project');
     if (!project.business_scope_id) throw AppError.validation('No business scope configured');
@@ -746,7 +751,7 @@ ${project.repo_url ? `Repository: ${project.repo_url}` : ''}`;
    * and store the diff data on the issue record.
    */
   private async fetchAndStoreDiff(orgId: string, projectId: string, issueId: string): Promise<void> {
-    const project = await prisma.projects.findFirst({ where: { id: projectId } });
+    const project = await prisma.projects.findFirst({ where: { id: projectId, organization_id: orgId } });
     if (!project?.workspace_session_id || !project.business_scope_id) return;
 
     const { config: appConfig } = await import('../config/index.js');
@@ -802,13 +807,13 @@ ${project.repo_url ? `Repository: ${project.repo_url}` : ''}`;
   /**
    * Get the diff data for an issue (for frontend display).
    */
-  async getIssueDiff(projectId: string, issueId: string): Promise<{
+  async getIssueDiff(orgId: string, projectId: string, issueId: string): Promise<{
     diff_stat: Record<string, unknown> | null;
     diff_patch: string | null;
     diff_created_at: Date | null;
   }> {
     const issue = await prisma.project_issues.findFirst({
-      where: { id: issueId, project_id: projectId },
+      where: { id: issueId, project_id: projectId, organization_id: orgId },
       select: { diff_stat: true, diff_patch: true, diff_created_at: true },
     });
     if (!issue) throw AppError.notFound('Issue not found');

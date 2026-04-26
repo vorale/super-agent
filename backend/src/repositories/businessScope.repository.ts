@@ -24,6 +24,7 @@ export interface BusinessScopeEntity {
   avatar: string | null;
   role: string | null;
   system_prompt: string | null;
+  settings: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;

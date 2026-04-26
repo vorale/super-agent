@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { config } from '../config/index.js';
 
 // Built-in skills directory: backend/skills/
@@ -80,6 +80,8 @@ export interface AgentForWorkspace {
   role: string | null;
   systemPrompt: string | null;
   skillNames: string[];
+  /** Avatar S3 key or URL (used for speaker annotation in SSE). */
+  avatar?: string | null;
   generatedSkills?: Array<{ name: string; description: string; body: string }>;
 }
 
@@ -89,6 +91,7 @@ export interface ScopeForWorkspace {
   name: string;
   description: string | null;
   systemPrompt: string | null;
+  settings?: Record<string, unknown> | null;
   configVersion: number;
   agents: AgentForWorkspace[];
   skills: SkillForWorkspace[];
@@ -161,27 +164,22 @@ export class WorkspaceManager {
   ): Promise<{ workspacePath: string; pluginPaths: string[] }> {
     const workspacePath = this.getSessionWorkspacePath(orgId, scope.id, sessionId);
 
-    // Create directory structure
-    await mkdir(join(workspacePath, '.claude', 'skills'), { recursive: true });
-    await mkdir(join(workspacePath, '.claude', 'agents'), { recursive: true });
-
-    // Generate all workspace files
-    await this.generateScopeClaudeMd(workspacePath, scope, selectedAgentId);
-    await this.generateAgentSubagentFiles(join(workspacePath, '.claude', 'agents'), scope.agents, join(workspacePath, '.claude', 'skills'));
-    await this.generateSettings(workspacePath, scope.mcpServers);
-
-    // Write scope memories as files in memories/ directory (not inlined in CLAUDE.md)
-    await this.writeMemoryFiles(workspacePath, scope.id);
-
-    // Download S3 skills, then layer in built-in skills (won't overwrite S3 ones)
+    // Create directory structure (must complete before parallel writes)
     const skillsDir = join(workspacePath, '.claude', 'skills');
+    const agentsDir = join(workspacePath, '.claude', 'agents');
+    await Promise.all([
+      mkdir(skillsDir, { recursive: true }),
+      mkdir(agentsDir, { recursive: true }),
+    ]);
 
-    // Create document group symlinks
+    // --- Phase 1: Run all independent file generation + downloads in parallel ---
     const docGroups = scope.documentGroups ?? [];
-    if (docGroups.length > 0) {
+
+    const createDocGroupSymlinks = async () => {
+      if (docGroups.length === 0) return;
       const docsDir = join(workspacePath, 'documents');
       await mkdir(docsDir, { recursive: true });
-      for (const group of docGroups) {
+      await Promise.all(docGroups.map(async (group) => {
         const linkName = group.name.replace(/[/\\:*?"<>|]/g, '-');
         const linkPath = join(docsDir, linkName);
         try {
@@ -191,16 +189,30 @@ export class WorkspaceManager {
             console.error(`Failed to symlink doc group "${group.name}":`, err.message);
           }
         }
-      }
-    }
+      }));
+    };
 
-    for (const skill of scope.skills) {
-      try {
-        await this.downloadSkill(skill, skillsDir);
-      } catch (error) {
-        console.error(`Failed to download skill "${skill.name}" for session ${sessionId}:`, error instanceof Error ? error.message : error);
-      }
-    }
+    const downloadAllSkills = async () => {
+      await Promise.all(scope.skills.map(async (skill) => {
+        try {
+          await this.downloadSkill(skill, skillsDir);
+        } catch (error) {
+          console.error(`Failed to download skill "${skill.name}" for session ${sessionId}:`, error instanceof Error ? error.message : error);
+        }
+      }));
+    };
+
+    await Promise.all([
+      this.generateScopeClaudeMd(workspacePath, scope, selectedAgentId),
+      this.generateAgentSubagentFiles(agentsDir, scope.agents, skillsDir),
+      this.generateSettings(workspacePath, scope.mcpServers),
+      this.writeMemoryFiles(workspacePath, scope.id),
+      createDocGroupSymlinks(),
+      downloadAllSkills(),
+    ]);
+
+    // --- Phase 2: Things that depend on phase 1 ---
+    // Built-in skills must run after S3 downloads (won't overwrite existing)
     const builtinCopied = await this.copyBuiltinSkills(skillsDir);
     if (builtinCopied.length > 0) {
       console.log(`Loaded built-in skills for session ${sessionId}: ${builtinCopied.join(', ')}`);
@@ -242,7 +254,7 @@ export class WorkspaceManager {
       await writeFile(ragSkillPath, ragSkillContent, 'utf-8');
     }
 
-    // Install plugins (git clone)
+    // Install plugins (git clone) — also parallelized internally
     const pluginPaths = await this.installPlugins(workspacePath, scope.plugins ?? []);
 
     // Write manifest
@@ -792,15 +804,13 @@ export class WorkspaceManager {
     if (!plugins || plugins.length === 0) return [];
     const pluginsDir = join(workspacePath, '.claude', 'plugins');
     await mkdir(pluginsDir, { recursive: true });
-    const installed: string[] = [];
 
-    for (const plugin of plugins) {
+    const results = await Promise.all(plugins.map(async (plugin) => {
       const targetDir = join(pluginsDir, plugin.name);
       try {
         // Skip if already cloned
         await access(targetDir);
-        installed.push(targetDir);
-        continue;
+        return targetDir;
       } catch { /* not yet cloned */ }
 
       try {
@@ -811,13 +821,15 @@ export class WorkspaceManager {
           'clone', '--depth', '1', '--branch', plugin.ref,
           plugin.gitUrl, targetDir,
         ], { timeout: 60_000 });
-        installed.push(targetDir);
         console.log(`[installPlugins] Cloned plugin "${plugin.name}" from ${plugin.gitUrl}@${plugin.ref}`);
+        return targetDir;
       } catch (error) {
         console.error(`[installPlugins] Failed to clone plugin "${plugin.name}":`, error instanceof Error ? error.message : error);
+        return null;
       }
-    }
-    return installed;
+    }));
+
+    return results.filter((p): p is string => p !== null);
   }
 
   // =========================================================================
@@ -1015,6 +1027,86 @@ export class WorkspaceManager {
 
   async writeManifest(workspacePath: string, manifest: WorkspaceManifest): Promise<void> {
     await writeFile(join(workspacePath, MANIFEST_FILENAME), JSON.stringify(manifest, null, 2), 'utf-8');
+  }
+
+  /**
+   * Ensure the local workspace is up-to-date with S3 (agentcore mode).
+   * Downloads all files from S3 to the local workspace directory.
+   * This is needed before operations that require local filesystem access
+   * (e.g. dev server preview, app detection) because the agentcore container
+   * writes files to S3 and the sync-back to local is fire-and-forget.
+   *
+   * Returns the number of files downloaded.
+   */
+  async ensureS3SyncedToLocal(
+    orgId: string,
+    scopeId: string,
+    sessionId: string,
+  ): Promise<number> {
+    const s3Bucket = config.agentcore.workspaceS3Bucket;
+    const prefix = `${orgId}/${scopeId}/${sessionId}/`;
+    const localDir = this.getSessionWorkspacePath(orgId, scopeId, sessionId);
+
+    let downloaded = 0;
+    let continuationToken: string | undefined;
+
+    do {
+      const result = await this.s3Client.send(new ListObjectsV2Command({
+        Bucket: s3Bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }));
+
+      for (const obj of result.Contents ?? []) {
+        if (!obj.Key) continue;
+        const relativePath = obj.Key.slice(prefix.length);
+        if (!relativePath || relativePath.endsWith('/')) continue;
+
+        // Skip directories that should not be synced to local
+        // (node_modules, .git, etc. — same as upload skip list)
+        const firstSegment = relativePath.split('/')[0];
+        const SKIP_SEGMENTS = new Set([
+          'node_modules', '.git', '__pycache__',
+          '.venv', 'venv', 'env', '.env',
+          '.tox', '.mypy_cache', '.pytest_cache', '.ruff_cache',
+          '.next', '.nuxt', '.turbo', '.cache', '.parcel-cache',
+          'bower_components', '.gradle', 'target', '.cargo',
+        ]);
+        if (SKIP_SEGMENTS.has(firstSegment)) continue;
+
+        const localPath = join(localDir, relativePath);
+        const localDirPath = dirname(localPath);
+
+        try {
+          await mkdir(localDirPath, { recursive: true });
+          // Skip if localPath is already a directory
+          try {
+            const s = await stat(localPath);
+            if (s.isDirectory()) continue;
+          } catch { /* doesn't exist yet, fine */ }
+          const response = await this.s3Client.send(new GetObjectCommand({
+            Bucket: s3Bucket,
+            Key: obj.Key,
+          }));
+          if (response.Body) {
+            await pipeline(
+              response.Body as NodeJS.ReadableStream,
+              createWriteStream(localPath),
+            );
+            downloaded++;
+          }
+        } catch (err) {
+          console.warn(`[workspace-manager] ensureS3SyncedToLocal failed for ${relativePath}:`, err instanceof Error ? err.message : err);
+        }
+      }
+
+      continuationToken = result.NextContinuationToken;
+    } while (continuationToken);
+
+    if (downloaded > 0) {
+      console.log(`[workspace-manager] Synced ${downloaded} files from S3 to local for session ${sessionId}`);
+    }
+    return downloaded;
   }
 
   /**
@@ -1395,6 +1487,19 @@ export class WorkspaceManager {
           Key: key,
           Body: content,
         })).catch(err => console.warn('[workspace-manager] S3 upload failed:', err));
+
+        // Notify the running container to pull the file from S3.
+        // Fire-and-forget: don't block the upload response if the container
+        // is not running or the sync fails (file is already in S3 and will
+        // be picked up on next invocation).
+        import('./agentcore-command.service.js').then(({ agentCoreCommandService }) => {
+          agentCoreCommandService.syncFileFromS3(
+            sessionId,
+            config.agentcore.workspaceS3Bucket,
+            key,
+            filePath,
+          ).catch(err => console.warn('[workspace-manager] Container sync failed (non-fatal):', err instanceof Error ? err.message : err));
+        });
       }
 
       return true;

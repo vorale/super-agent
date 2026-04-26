@@ -127,4 +127,23 @@ export async function skillsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.status(200).send({ success: true });
     }
   );
+
+  // PUT /api/skills/:id/content/scoped - Update SKILL.md content with fork-on-write for a scope
+  fastify.put<{ Params: { id: string }; Body: { content: string; scope_id: string } }>(
+    '/:id/content/scoped',
+    { preHandler: [authenticate] },
+    async (request, reply) => {
+      const { content, scope_id } = request.body;
+      if (!content || typeof content !== 'string') {
+        return reply.status(400).send({ error: 'content is required', code: 'VALIDATION_ERROR' });
+      }
+      if (!scope_id || typeof scope_id !== 'string') {
+        return reply.status(400).send({ error: 'scope_id is required', code: 'VALIDATION_ERROR' });
+      }
+      const result = await skillService.updateSkillContentForScope(
+        request.user!.orgId, request.params.id, scope_id, content,
+      );
+      return reply.status(200).send({ success: true, skillId: result.skillId, forked: result.forked });
+    }
+  );
 }

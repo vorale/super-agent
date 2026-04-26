@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import { useTranslation } from '@/i18n'
-import { MessageList, QuickQuestions, WorkspaceExplorer } from '@/components'
+import { MessageList, QuickQuestions, WorkspaceExplorer, useToast } from '@/components'
 import type { FileNode } from '@/components/WorkspaceExplorer'
 import { SessionHistoryPanel } from '@/components/chat/SessionHistoryPanel'
 import { SaveToMemoryModal } from '@/components/chat/SaveToMemoryModal'
@@ -1144,6 +1144,12 @@ function AgentSelector({ selectedAgentId, selectedScopeId, onAgentChange }: Agen
 // Upload Modal
 // ============================================================================
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function UploadModal({ open, onClose, onConfirm }: {
   open: boolean
   onClose: () => void
@@ -1153,15 +1159,30 @@ function UploadModal({ open, onClose, onConfirm }: {
   const [files, setFiles] = useState<File[]>([])
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [rejectedFiles, setRejectedFiles] = useState<string[]>([])
+
+  const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
 
   // Reset files when modal opens
-  useEffect(() => { if (open) setFiles([]) }, [open])
+  useEffect(() => { if (open) { setFiles([]); setRejectedFiles([]) } }, [open])
 
   const addFiles = useCallback((newFiles: FileList | File[]) => {
     const arr = Array.from(newFiles)
+    const accepted: File[] = []
+    const rejected: string[] = []
+    for (const f of arr) {
+      if (f.size > MAX_FILE_SIZE) {
+        rejected.push(`${f.name} (${formatFileSize(f.size)})`)
+      } else {
+        accepted.push(f)
+      }
+    }
+    if (rejected.length > 0) {
+      setRejectedFiles(rejected)
+    }
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size))
-      const unique = arr.filter(f => !existing.has(f.name + f.size))
+      const unique = accepted.filter(f => !existing.has(f.name + f.size))
       return [...prev, ...unique]
     })
   }, [])
@@ -1235,13 +1256,23 @@ function UploadModal({ open, onClose, onConfirm }: {
                     <FileIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
                     <span className="text-sm text-gray-300 truncate">{file.name}</span>
                     <span className="text-xs text-gray-600 flex-shrink-0">
-                      {file.size < 1024 ? `${file.size} B` : `${(file.size / 1024).toFixed(1)} KB`}
+                      {formatFileSize(file.size)}
                     </span>
                   </div>
                   <button onClick={() => removeFile(i)} className="text-gray-500 hover:text-red-400 transition-colors flex-shrink-0 ml-2">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
+              ))}
+            </div>
+          )}
+
+          {/* Rejected files warning */}
+          {rejectedFiles.length > 0 && (
+            <div className="mt-3 px-3 py-2 bg-red-900/30 border border-red-700/50 rounded-lg">
+              <p className="text-xs text-red-400 font-medium mb-1">{t('chat.fileTooLarge')}</p>
+              {rejectedFiles.map((name, i) => (
+                <p key={i} className="text-xs text-red-400/70 truncate">{name}</p>
               ))}
             </div>
           )}
@@ -1277,6 +1308,9 @@ interface MessageInputProps {
   businessScopeId: string | null
   disabled?: boolean
   isSending?: boolean
+  selectedModel: string | null
+  onModelChange: (model: string | null) => void
+  scopeDefaultModel?: string | null
 }
 
 /** Flatten a FileNode tree into a list of file paths. */
@@ -1290,11 +1324,17 @@ function flattenFiles(nodes: FileNode[], prefix = ''): string[] {
   return result
 }
 
-function MessageInput({ onSend, onStop, onUpload, sessionId, businessScopeId, disabled = false, isSending = false }: MessageInputProps) {
+function MessageInput({ onSend, onStop, onUpload, sessionId, businessScopeId, disabled = false, isSending = false, selectedModel, onModelChange, scopeDefaultModel }: MessageInputProps) {
   const { t } = useTranslation()
   const [input, setInput] = useState('')
   const [showUpload, setShowUpload] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+
+  // Model selector state
+  const [showModelPicker, setShowModelPicker] = useState(false)
+  const [availableModels, setAvailableModels] = useState<Array<{ id: string; litellm_model: string; provider: string }>>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const modelPickerRef = useRef<HTMLDivElement>(null)
 
   // File autocomplete state
   const [allFiles, setAllFiles] = useState<string[]>([])
@@ -1318,6 +1358,28 @@ function MessageInput({ onSend, onStop, onUpload, sessionId, businessScopeId, di
       .then(res => setAllFiles(flattenFiles(res.files)))
       .catch(() => setAllFiles([]))
   }, [sessionId])
+
+  // Fetch available models from LiteLLM
+  useEffect(() => {
+    if (!showModelPicker || availableModels.length > 0) return
+    setModelsLoading(true)
+    restClient.get<{ data: Array<{ id: string; litellm_model: string; provider: string }> }>('/api/litellm/models')
+      .then(res => setAvailableModels(res.data || []))
+      .catch(() => setAvailableModels([]))
+      .finally(() => setModelsLoading(false))
+  }, [showModelPicker, availableModels.length])
+
+  // Close model picker on click outside
+  useEffect(() => {
+    if (!showModelPicker) return
+    const handler = (e: MouseEvent) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setShowModelPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showModelPicker])
 
   const filtered = acVisible
     ? allFiles.filter(f => f.toLowerCase().includes(acQuery.toLowerCase())).slice(0, 12)
@@ -1563,6 +1625,10 @@ function MessageInput({ onSend, onStop, onUpload, sessionId, businessScopeId, di
           >
             <Paperclip className="w-5 h-5" />
           </button>
+
+          {/* Model selector — hidden for now (session-level model switching not yet supported) */}
+          {/* TODO: Re-enable when AgentCore supports per-invocation model override */}
+
           <textarea
             ref={inputRef}
             value={input}
@@ -1607,6 +1673,9 @@ function MessageInput({ onSend, onStop, onUpload, sessionId, businessScopeId, di
 function ChatInterfaceContent() {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const toast = useToast()
+  const toastRef = useRef(toast)
+  toastRef.current = toast
   const {
     messages,
     quickQuestions,
@@ -1625,7 +1694,21 @@ function ChatInterfaceContent() {
     loadSession,
     startNewSession,
     clearConversation,
+    selectedModel,
+    setSelectedModel,
   } = useContext(ChatContext)
+
+  // Fetch scope's default model when scope changes
+  const [scopeDefaultModel, setScopeDefaultModel] = useState<string | null>(null)
+  useEffect(() => {
+    if (!selectedBusinessScopeId) { setScopeDefaultModel(null); return }
+    restClient.get<any>(`/api/business-scopes/${selectedBusinessScopeId}`)
+      .then(res => {
+        const modelId = res?.settings?.modelId as string | undefined
+        setScopeDefaultModel(modelId || null)
+      })
+      .catch(() => setScopeDefaultModel(null))
+  }, [selectedBusinessScopeId])
 
   // Auto-send initial prompt from showcase "Run" button
   const autoPromptSent = useRef(false)
@@ -1764,24 +1847,50 @@ function ChatInterfaceContent() {
 
   const handleUploadFile = useCallback(async (files: File[]) => {
     if (!backendSessionId || files.length === 0) return
+
+    const { success: showSuccess, error: showError } = toastRef.current
+
+    let successCount = 0
+    let failCount = 0
+
     for (const file of files) {
-      const reader = new FileReader()
-      await new Promise<void>((resolve) => {
-        reader.onload = async () => {
-          const base64 = (reader.result as string).split(',')[1]
-          try {
-            await restClient.post(`/api/chat/sessions/${backendSessionId}/workspace/upload`, {
-              fileName: file.name,
-              content: base64,
-            })
-          } catch (err) {
-            console.error('Upload failed:', file.name, err)
-          }
-          resolve()
+      try {
+        const formData = new FormData()
+        formData.append('file', file, file.name)
+
+        const token = (await import('@/services/auth')).getValidToken
+          ? await (await import('@/services/auth')).getValidToken()
+          : null
+        const baseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000'
+
+        const response = await fetch(
+          `${baseUrl}/api/chat/sessions/${backendSessionId}/workspace/upload-file`,
+          {
+            method: 'POST',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+            body: formData,
+          },
+        )
+
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}))
+          throw new Error(body.error || `HTTP ${response.status}`)
         }
-        reader.readAsDataURL(file)
-      })
+
+        successCount++
+      } catch (err) {
+        failCount++
+        console.error('Upload failed:', file.name, err)
+      }
     }
+
+    if (successCount > 0) {
+      showSuccess(`${successCount} file(s) uploaded`)
+    }
+    if (failCount > 0) {
+      showError(`${failCount} file(s) failed to upload`)
+    }
+
     setWsRefreshKey(k => k + 1)
   }, [backendSessionId])
 
@@ -1946,7 +2055,7 @@ function ChatInterfaceContent() {
                 refreshKey={wsRefreshKey}
                 onSendMessage={handleSendMessage}
               />
-              <MessageInput onSend={handleSendMessage} onStop={stopGeneration} onUpload={handleUploadFile} sessionId={backendSessionId} businessScopeId={selectedBusinessScopeId} disabled={isSending} isSending={isSending} />
+              <MessageInput onSend={handleSendMessage} onStop={stopGeneration} onUpload={handleUploadFile} sessionId={backendSessionId} businessScopeId={selectedBusinessScopeId} disabled={isSending} isSending={isSending} selectedModel={selectedModel} onModelChange={setSelectedModel} scopeDefaultModel={scopeDefaultModel} />
             </>
           )
         ) : (
@@ -1968,6 +2077,7 @@ function ChatInterfaceContent() {
         sessionId={backendSessionId}
         businessScopeId={selectedBusinessScopeId}
         refreshKey={wsRefreshKey}
+        isGenerating={isSending}
         onFileOpen={handleFileOpen}
         width={panelWidth}
         onWidthChange={setPanelWidth}

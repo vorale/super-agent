@@ -14,6 +14,9 @@ import { authenticate, requireModifyAccess } from '../middleware/auth.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { z } from 'zod';
 import { ZodError } from 'zod';
+import { workspaceManager } from '../services/workspace-manager.js';
+import { config } from '../config/index.js';
+import { prisma } from '../config/database.js';
 import type {
   CanvasData,
   WorkflowVariableDefinition,
@@ -492,6 +495,127 @@ export async function executionRoutes(fastify: FastifyInstance): Promise<void> {
       );
 
       return reply.status(200).send(result);
+    }
+  );
+
+  // ==========================================================================
+  // Execution Workspace & Logs APIs
+  // ==========================================================================
+
+  /**
+   * GET /api/executions/:executionId/logs
+   * Get execution logs for a workflow execution.
+   */
+  fastify.get<{ Params: { executionId: string } }>(
+    '/executions/:executionId/logs',
+    { preHandler: [authenticate] },
+    async (request, reply) => {
+      const { executionId } = request.params;
+
+      const execution = await prisma.workflow_executions.findFirst({
+        where: { id: executionId, organization_id: request.user!.orgId },
+        select: { id: true, status: true, logs: true, title: true, started_at: true, completed_at: true },
+      });
+
+      if (!execution) {
+        throw AppError.notFound('Execution not found');
+      }
+
+      return reply.status(200).send({
+        executionId: execution.id,
+        status: execution.status,
+        title: execution.title,
+        startedAt: execution.started_at,
+        completedAt: execution.completed_at,
+        logs: execution.logs ?? [],
+      });
+    }
+  );
+
+  /**
+   * GET /api/executions/:executionId/workspace/files
+   * List workspace files for a workflow execution.
+   * Uses local-first strategy with S3 fallback (same as chat workspace).
+   */
+  fastify.get<{ Params: { executionId: string } }>(
+    '/executions/:executionId/workspace/files',
+    { preHandler: [authenticate] },
+    async (request, reply) => {
+      const { executionId } = request.params;
+
+      const execution = await prisma.workflow_executions.findFirst({
+        where: { id: executionId, organization_id: request.user!.orgId },
+        select: { workspace_session_id: true, workspace_scope_id: true, organization_id: true },
+      });
+
+      if (!execution) {
+        throw AppError.notFound('Execution not found');
+      }
+
+      if (!execution.workspace_session_id || !execution.workspace_scope_id) {
+        return reply.status(200).send({ files: [], message: 'No workspace associated with this execution' });
+      }
+
+      const orgId = execution.organization_id;
+      const scopeId = execution.workspace_scope_id;
+      const sessionId = execution.workspace_session_id;
+
+      // Local-first, S3 fallback (same pattern as chat workspace)
+      let files = await workspaceManager.listWorkspaceFiles(orgId, scopeId, sessionId);
+
+      if (!files && config.agentRuntime === 'agentcore') {
+        files = await workspaceManager.listWorkspaceFilesFromS3(orgId, scopeId, sessionId);
+      }
+
+      return reply.status(200).send({ files: files ?? [] });
+    }
+  );
+
+  /**
+   * GET /api/executions/:executionId/workspace/files/*
+   * Read a specific workspace file for a workflow execution.
+   * Uses local-first strategy with S3 fallback.
+   */
+  fastify.get<{ Params: { executionId: string; '*': string } }>(
+    '/executions/:executionId/workspace/files/*',
+    { preHandler: [authenticate] },
+    async (request, reply) => {
+      const { executionId } = request.params;
+      const filePath = request.params['*'];
+
+      if (!filePath) {
+        throw AppError.validation('File path is required');
+      }
+
+      const execution = await prisma.workflow_executions.findFirst({
+        where: { id: executionId, organization_id: request.user!.orgId },
+        select: { workspace_session_id: true, workspace_scope_id: true, organization_id: true },
+      });
+
+      if (!execution) {
+        throw AppError.notFound('Execution not found');
+      }
+
+      if (!execution.workspace_session_id || !execution.workspace_scope_id) {
+        throw AppError.notFound('No workspace associated with this execution');
+      }
+
+      const orgId = execution.organization_id;
+      const scopeId = execution.workspace_scope_id;
+      const sessionId = execution.workspace_session_id;
+
+      // Local-first, S3 fallback
+      let content = await workspaceManager.readWorkspaceFile(orgId, scopeId, sessionId, filePath);
+
+      if (content === null && config.agentRuntime === 'agentcore') {
+        content = await workspaceManager.readWorkspaceFileFromS3(orgId, scopeId, sessionId, filePath);
+      }
+
+      if (content === null) {
+        throw AppError.notFound('File not found');
+      }
+
+      return reply.status(200).send({ path: filePath, content });
     }
   );
 }

@@ -65,6 +65,8 @@ export interface ChatStreamOptions {
   mentionAgentId?: string;
   sessionId?: string;
   message: string;
+  /** Per-request model override (from chat UI model selector). */
+  model?: string;
   context?: Record<string, unknown>;
 }
 
@@ -466,6 +468,7 @@ export class ChatService {
       name: scope.name,
       description: scope.description,
       systemPrompt: scope.system_prompt ?? null,
+      settings: (scope as any).settings as Record<string, unknown> | null ?? null,
       configVersion: scope.config_version,
       agents: agentsWithSkills.map(a => {
         const mc = a.model_config as Record<string, unknown> | null;
@@ -497,6 +500,7 @@ export class ChatService {
           role: a.role,
           systemPrompt: a.system_prompt,
           skillNames: a.skills.map(s => s.name),
+          avatar: a.avatar ?? null,
           generatedSkills: includeGeneratedSkills && allGenerated.length > 0 ? allGenerated : undefined,
         };
       }),
@@ -519,6 +523,7 @@ export class ChatService {
     userId: string,
     options: ChatStreamOptions,
     skillsOverride?: SkillForWorkspace[],
+    systemPromptOverride?: string,
   ): Promise<void> {
     // Determine which flow to use
     const useScopeFlow = !!options.businessScopeId;
@@ -563,6 +568,29 @@ export class ChatService {
       claudeSessionId = result.claudeSessionId;
       workspacePath = result.workspacePath;
     }
+
+    // Apply system prompt override if provided (e.g., single-skill workshop testing)
+    if (systemPromptOverride) {
+      agentConfig.systemPrompt = systemPromptOverride;
+    }
+
+    // Apply per-request model override from chat UI (takes priority over scope default)
+    console.log(`[chat] options.model=${options.model}, agentConfig.model=${agentConfig.model}, claudeSessionId=${claudeSessionId}`);
+    if (options.model) {
+      // Only reset Claude Code session if the model actually changed.
+      // SDK locks model per session, so switching requires a fresh session
+      // that falls back to history injection for context continuity.
+      const currentModel = agentConfig.model;
+      agentConfig.model = options.model;
+      if (options.model !== currentModel && claudeSessionId) {
+        console.log(`[chat] Model changed from ${currentModel} to ${options.model}, resetting Claude session`);
+        claudeSessionId = undefined;
+        if (sessionId) {
+          chatSessionRepository.updateClaudeSessionId(sessionId, organizationId, null).catch(() => {});
+        }
+      }
+    }
+    console.log(`[chat] Final model=${agentConfig.model}, claudeSessionId=${claudeSessionId}`);
 
     // Persist user message + mark session as generating + agent as busy (in parallel)
     const resolvedAgentId = agentConfig.id;
@@ -633,6 +661,7 @@ export class ChatService {
     }, 15_000);
 
     const allContentBlocks: ContentBlock[] = [];
+    let lastModelId: string | undefined;
 
     // Listen for external events pushed to the registry by other routes (e.g. preview_ready)
     const registrySub = streamRegistry.subscribe(sessionId);
@@ -708,6 +737,7 @@ export class ChatService {
 
           if (event.type === 'assistant' && event.content) {
             allContentBlocks.push(...event.content);
+            if (event.model) lastModelId = event.model;
 
             // Detect sub-agent speaker changes from content blocks
             for (const block of event.content) {
@@ -738,6 +768,11 @@ export class ChatService {
 
           // Record event in Langfuse trace
           recordEvent(langfuseTrace, event);
+
+          // Inject tracked model into result event so the frontend can display it
+          if (event.type === 'result' && lastModelId && !event.model) {
+            event.model = lastModelId;
+          }
 
           // Process through conversation hooks (metrics, sub-agent detection)
           processConversationEvent(hookCtx, event);
@@ -854,11 +889,11 @@ export class ChatService {
 
     // Build scope data for workspace manager and load agents in parallel.
     // buildScopeForWorkspace already queries scope + agentsWithSkills internally,
-    // so we also fetch agentsWithSkills here in parallel to avoid a duplicate query.
-    const [scopeForWorkspace, agentsWithSkills] = await Promise.all([
-      this.buildScopeForWorkspace(scopeId, organizationId, selectedAgentId),
-      this.businessScopeService.getScopeAgentsWithSkills(scopeId, organizationId),
-    ]);
+    // so we reuse its result instead of querying agentsWithSkills separately.
+    const scopeForWorkspace = await this.buildScopeForWorkspace(scopeId, organizationId, selectedAgentId);
+
+    // Derive agentsWithSkills from scopeForWorkspace to avoid a duplicate DB query
+    const agentsWithSkills = scopeForWorkspace.agents;
 
     // Get or create session
     let sessionId = options.sessionId;
@@ -898,8 +933,10 @@ export class ChatService {
     const agentConfig: AgentConfig = {
       id: selectedAgent?.id ?? scopeId,
       name: selectedAgent?.name ?? scopeForWorkspace.name,
-      displayName: selectedAgent?.display_name ?? scopeForWorkspace.name,
-      systemPrompt: selectedAgent?.system_prompt ?? null,
+      displayName: selectedAgent?.displayName ?? scopeForWorkspace.name,
+      systemPrompt: selectedAgent?.systemPrompt ?? null,
+      model: scopeForWorkspace.settings?.modelId as string | undefined
+        ?? (selectedAgent?.model_config as Record<string, unknown>)?.modelId as string | undefined,
       organizationId,
       skillIds: scopeForWorkspace.skills.map(s => s.id),
       mcpServerIds: [],
@@ -909,11 +946,10 @@ export class ChatService {
       // Resolve avatar S3 key to a full API URL so the frontend can load it directly
       let avatarUrl: string | null = null;
       if (a.avatar) {
-        // Strip any leading slashes and build the API path
         const key = a.avatar.replace(/^\/+/, '');
         avatarUrl = `/api/avatars/${key}`;
       }
-      return [a.name, { displayName: a.display_name || a.name, avatar: avatarUrl }];
+      return [a.name, { displayName: a.displayName || a.name, avatar: avatarUrl }];
     }));
     return { sessionId, workspacePath, agentConfig, skills: scopeForWorkspace.skills, claudeSessionId: session.claude_session_id ?? undefined, subAgentNames: agentsWithSkills.map(a => a.name), subAgentNameToId: new Map(agentsWithSkills.map(a => [a.name, a.id])), subAgentInfoMap, pluginPaths, mcpServers: await this.readSessionMcpServers(workspacePath) };
   }
@@ -1024,6 +1060,7 @@ export class ChatService {
       name: agent.name,
       displayName: agent.display_name || agent.name,
       systemPrompt: agent.system_prompt,
+      model: (agent.model_config as Record<string, unknown>)?.modelId as string | undefined,
       organizationId,
       skillIds: skills.map(s => s.id),
       mcpServerIds: [],
@@ -1070,7 +1107,7 @@ export class ChatService {
           break;
         case 'result':
           reply.raw.write(formatSSEEvent({
-            data: JSON.stringify({ type: 'result', session_id: safe.sessionId, duration_ms: safe.durationMs, num_turns: safe.numTurns }),
+            data: JSON.stringify({ type: 'result', session_id: safe.sessionId, duration_ms: safe.durationMs, num_turns: safe.numTurns, model: safe.model, token_usage: safe.tokenUsage ? { input_tokens: safe.tokenUsage.inputTokens, output_tokens: safe.tokenUsage.outputTokens, cache_read_input_tokens: safe.tokenUsage.cacheReadInputTokens, cache_creation_input_tokens: safe.tokenUsage.cacheCreationInputTokens, total_cost_usd: safe.tokenUsage.totalCostUsd } : undefined }),
           }));
           break;
         case 'heartbeat':

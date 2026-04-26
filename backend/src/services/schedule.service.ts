@@ -192,7 +192,7 @@ class ScheduleService {
     if (newEnabled && nextRunAt) {
       await this.createOrUpdateScheduledRecord(scheduleId, organizationId, nextRunAt);
     } else {
-      await this.deleteScheduledRecords(scheduleId);
+      await this.deleteScheduledRecords(scheduleId, organizationId);
     }
 
     return this.mapToScheduleConfig(updated);
@@ -220,7 +220,7 @@ class ScheduleService {
     });
 
     // Delete pending scheduled records
-    await this.deleteScheduledRecords(scheduleId);
+    await this.deleteScheduledRecords(scheduleId, organizationId);
   }
 
   /**
@@ -622,13 +622,13 @@ class ScheduleService {
   /**
    * Delete pending scheduled records
    */
-  private async deleteScheduledRecords(scheduleId: string): Promise<void> {
-    await prisma.schedule_execution_records.deleteMany({
-      where: {
-        schedule_id: scheduleId,
-        status: 'scheduled',
-      },
-    });
+  private async deleteScheduledRecords(scheduleId: string, organizationId?: string): Promise<void> {
+    const where: Record<string, unknown> = {
+      schedule_id: scheduleId,
+      status: 'scheduled',
+    };
+    if (organizationId) where.organization_id = organizationId;
+    await prisma.schedule_execution_records.deleteMany({ where });
   }
 
   private mapToScheduleConfig(schedule: any): ScheduleConfig {

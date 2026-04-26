@@ -223,11 +223,19 @@ export function SessionHistoryPanel({
               }`}
             >
               <div className="flex items-start gap-2">
-                {(sessionStreamManager.isSending(session.id) || session.status === 'generating') ? (
-                  <Loader2 className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0 animate-spin" />
-                ) : (
-                  <MessageSquare className="w-3.5 h-3.5 text-gray-500 mt-0.5 flex-shrink-0" />
-                )}
+                {(() => {
+                  // For the active session, trust the frontend stream state (more up-to-date than DB status).
+                  // For other sessions, fall back to the backend status field.
+                  const isActive = activeSessionId === session.id
+                  const spinning = isActive
+                    ? sessionStreamManager.isSending(session.id)
+                    : (sessionStreamManager.isSending(session.id) || session.status === 'generating')
+                  return spinning ? (
+                    <Loader2 className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0 animate-spin" />
+                  ) : (
+                    <MessageSquare className="w-3.5 h-3.5 text-gray-500 mt-0.5 flex-shrink-0" />
+                  )
+                })()}
                 <div className="flex-1 min-w-0">
                   {editingId === session.id ? (
                     <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>

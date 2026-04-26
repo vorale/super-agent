@@ -5,13 +5,13 @@
  * has built an app (detected by scanning the workspace for index.html).
  * Shows contextual actions: Preview, Publish / Update, Open.
  *
- * Preview sends a prompt to the agent which triggers a preview-typed publish.
- * The backend emits a `preview_ready` SSE event with the URL, and the
- * SessionStreamManager auto-opens it in a new tab.
+ * Preview and Publish call the backend API directly — no agent round-trip
+ * needed. The backend already has the workspace files synced locally and
+ * handles entry-point detection, bundle copying, and DB registration.
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import { Rocket, Eye, Loader2, X, RefreshCw, ExternalLink } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Rocket, Eye, Loader2, X, RefreshCw, ExternalLink, Pencil, Check } from 'lucide-react'
 import { restClient } from '@/services/api/restClient'
 
 interface DetectedApp {
@@ -25,17 +25,35 @@ interface DetectedApp {
   previewAppId: string | null
 }
 
+/** Response from POST /api/apps/publish-from-workspace */
+interface PublishResponse {
+  id: string
+  name: string
+  version: string
+  access_url: string
+  upgraded?: boolean
+  previous_version?: string
+}
+
 interface WorkspaceActionsProps {
   sessionId: string | null
   refreshKey: number
+  /** @deprecated No longer used — preview/publish call the API directly. Kept for call-site compat. */
   onSendMessage?: (message: string) => void
 }
 
-export function WorkspaceActions({ sessionId, refreshKey, onSendMessage }: WorkspaceActionsProps) {
+export function WorkspaceActions({ sessionId, refreshKey }: WorkspaceActionsProps) {
   const [apps, setApps] = useState<DetectedApp[]>([])
   const [publishing, setPublishing] = useState<string | null>(null)
   const [previewing, setPreviewing] = useState<string | null>(null)
   const [dismissed, setDismissed] = useState(false)
+
+  // Per-app custom names (folder → user-edited name)
+  const [customNames, setCustomNames] = useState<Record<string, string>>({})
+  // Which app folder is currently being edited
+  const [editingFolder, setEditingFolder] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const editInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!sessionId) { setApps([]); return }
@@ -46,43 +64,96 @@ export function WorkspaceActions({ sessionId, refreshKey, onSendMessage }: Works
       .catch(() => setApps([]))
   }, [sessionId, refreshKey])
 
-  const handlePublish = useCallback((app: DetectedApp) => {
-    if (!sessionId || !onSendMessage) return
-    setPublishing(app.folder)
+  // Focus input when entering edit mode
+  useEffect(() => {
+    if (editingFolder && editInputRef.current) {
+      editInputRef.current.focus()
+      editInputRef.current.select()
+    }
+  }, [editingFolder])
 
-    const name = app.name || app.folder || 'my-app'
-    const folder = app.folder === '.' ? '' : app.folder
-    const isUpdate = !!app.publishedAppId
+  /** Get the display name for an app, respecting user edits. */
+  const getAppName = useCallback((app: DetectedApp) => {
+    return customNames[app.folder] || app.name || (app.folder === '.' ? 'Root app' : app.folder)
+  }, [customNames])
 
-    const msg = isUpdate
-      ? `Update the published app "${name}" (ID: ${app.publishedAppId}) from the "${folder || 'root'}" folder. Rebuild if needed and re-publish.`
-      : folder
-        ? `Publish the app in the "${folder}" folder to the marketplace. App name: "${name}".`
-        : `Publish the app in the workspace root to the marketplace. App name: "${name}".`
+  const startEditing = useCallback((app: DetectedApp) => {
+    setEditingFolder(app.folder)
+    setEditValue(getAppName(app))
+  }, [getAppName])
 
-    onSendMessage(msg)
-    setTimeout(() => setPublishing(null), 2000)
-  }, [sessionId, onSendMessage])
+  const confirmEdit = useCallback(() => {
+    if (editingFolder && editValue.trim()) {
+      setCustomNames(prev => ({ ...prev, [editingFolder]: editValue.trim() }))
+    }
+    setEditingFolder(null)
+    setEditValue('')
+  }, [editingFolder, editValue])
 
-  const handlePreview = useCallback((app: DetectedApp) => {
-    if (!sessionId || !onSendMessage) return
+  const cancelEdit = useCallback(() => {
+    setEditingFolder(null)
+    setEditValue('')
+  }, [])
+
+  /**
+   * Publish or preview an app by calling the backend API directly.
+   * No agent round-trip — the backend reads from the local workspace.
+   */
+  const publishApp = useCallback(async (app: DetectedApp, status: 'preview' | 'published') => {
+    if (!sessionId) return
+
+    const name = customNames[app.folder] || app.name || app.folder || 'my-app'
+    const folderPath = app.folder === '.' ? '.' : app.folder
+
+    try {
+      const res = await restClient.post<PublishResponse>('/api/apps/publish-from-workspace', {
+        session_id: sessionId,
+        folder_path: folderPath,
+        name,
+        status,
+      })
+
+      if (status === 'preview') {
+        // Open preview tab directly — no need to wait for SSE
+        window.dispatchEvent(new CustomEvent('preview-ready', {
+          detail: { url: res.access_url, name: res.name || name, appId: res.id },
+        }))
+      }
+
+      // Refresh app list to pick up new published/preview state
+      restClient.get<{ apps: DetectedApp[] }>(`/api/chat/sessions/${sessionId}/workspace/detect-apps`)
+        .then(r => setApps(r.apps))
+        .catch(() => {})
+
+      return res
+    } catch (err) {
+      console.error(`[WorkspaceActions] ${status} failed:`, err)
+      throw err
+    }
+  }, [sessionId, customNames])
+
+  const handlePreview = useCallback(async (app: DetectedApp) => {
     setPreviewing(app.folder)
+    try {
+      await publishApp(app, 'preview')
+    } finally {
+      setPreviewing(null)
+    }
+  }, [publishApp])
 
-    const name = app.name || app.folder || 'my-app'
-    const folder = app.folder === '.' ? '' : app.folder
-
-    const msg = folder
-      ? `Use the app-publisher skill to preview the app in the "${folder}" folder. App name: "${name}". Pass --status "preview" to publish-app.sh.`
-      : `Use the app-publisher skill to preview the app in the workspace root. App name: "${name}". Pass --status "preview" to publish-app.sh.`
-
-    onSendMessage(msg)
-    setTimeout(() => setPreviewing(null), 3000)
-  }, [sessionId, onSendMessage])
+  const handlePublish = useCallback(async (app: DetectedApp) => {
+    setPublishing(app.folder)
+    try {
+      await publishApp(app, 'published')
+    } finally {
+      setPublishing(null)
+    }
+  }, [publishApp])
 
   const handleOpenPublished = useCallback((app: DetectedApp) => {
     if (!app.publishedAppId) return
     const baseUrl = import.meta.env.VITE_API_BASE_URL ?? ''
-    const token = localStorage.getItem('cognito_id_token')
+    const token = localStorage.getItem('local_auth_token') || localStorage.getItem('cognito_id_token')
     const url = `${baseUrl}/api/apps/${app.publishedAppId}/static/index.html${token ? `?token=${encodeURIComponent(token)}` : ''}`
     window.open(url, '_blank')
   }, [])
@@ -109,16 +180,51 @@ export function WorkspaceActions({ sessionId, refreshKey, onSendMessage }: Works
 
         <div className="space-y-2">
           {apps.map(app => {
-            const label = app.name || (app.folder === '.' ? 'Root app' : app.folder)
+            const label = getAppName(app)
             const isPublishing = publishing === app.folder
             const isPreviewing = previewing === app.folder
             const isPublished = !!app.publishedAppId
+            const isEditing = editingFolder === app.folder
 
             return (
               <div key={app.folder} className="flex items-center gap-2">
                 <div className="flex items-center gap-1.5 truncate flex-1 min-w-0">
-                  <span className="text-sm text-white truncate">{label}</span>
-                  {isPublished && app.publishedVersion && (
+                  {isEditing ? (
+                    <div className="flex items-center gap-1 flex-1 min-w-0">
+                      <input
+                        ref={editInputRef}
+                        type="text"
+                        value={editValue}
+                        onChange={e => setEditValue(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') confirmEdit()
+                          if (e.key === 'Escape') cancelEdit()
+                        }}
+                        onBlur={confirmEdit}
+                        className="flex-1 min-w-0 bg-gray-800 border border-purple-500/40 rounded px-1.5 py-0.5 text-sm text-white outline-none focus:border-purple-400"
+                      />
+                      <button
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={confirmEdit}
+                        className="p-0.5 text-green-400 hover:text-green-300 transition-colors"
+                        title="Confirm"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="text-sm text-white truncate">{label}</span>
+                      <button
+                        onClick={() => startEditing(app)}
+                        className="p-0.5 text-gray-500 hover:text-gray-300 transition-colors flex-shrink-0"
+                        title="Edit app name"
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </>
+                  )}
+                  {!isEditing && isPublished && app.publishedVersion && (
                     <span className="text-[10px] text-green-400/70 bg-green-500/10 px-1.5 py-0.5 rounded-full flex-shrink-0">
                       v{app.publishedVersion}
                     </span>
@@ -126,20 +232,18 @@ export function WorkspaceActions({ sessionId, refreshKey, onSendMessage }: Works
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {/* Preview button */}
-                  {onSendMessage && (
-                    <button
-                      onClick={() => handlePreview(app)}
-                      disabled={isPreviewing}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700 border border-gray-700 transition-colors disabled:opacity-50"
-                    >
-                      {isPreviewing ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Eye className="w-3 h-3" />
-                      )}
-                      {isPreviewing ? 'Loading...' : 'Preview'}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handlePreview(app)}
+                    disabled={isPreviewing || isEditing}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700 border border-gray-700 transition-colors disabled:opacity-50"
+                  >
+                    {isPreviewing ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Eye className="w-3 h-3" />
+                    )}
+                    {isPreviewing ? 'Loading...' : 'Preview'}
+                  </button>
 
                   {/* Open published app in new tab */}
                   {isPublished && (
@@ -154,26 +258,24 @@ export function WorkspaceActions({ sessionId, refreshKey, onSendMessage }: Works
                   )}
 
                   {/* Publish / Update button */}
-                  {onSendMessage && (
-                    <button
-                      onClick={() => handlePublish(app)}
-                      disabled={isPublishing}
-                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
-                        isPublished
-                          ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30'
-                          : 'bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50'
-                      }`}
-                    >
-                      {isPublishing ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : isPublished ? (
-                        <RefreshCw className="w-3 h-3" />
-                      ) : (
-                        <Rocket className="w-3 h-3" />
-                      )}
-                      {isPublishing ? 'Publishing...' : isPublished ? 'Update' : 'Publish'}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handlePublish(app)}
+                    disabled={isPublishing || isEditing}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                      isPublished
+                        ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/30'
+                        : 'bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50'
+                    }`}
+                  >
+                    {isPublishing ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : isPublished ? (
+                      <RefreshCw className="w-3 h-3" />
+                    ) : (
+                      <Rocket className="w-3 h-3" />
+                    )}
+                    {isPublishing ? 'Publishing...' : isPublished ? 'Update' : 'Publish'}
+                  </button>
                 </div>
               </div>
             )

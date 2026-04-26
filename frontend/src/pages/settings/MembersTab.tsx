@@ -5,6 +5,7 @@ import { useTranslation } from '@/i18n';
 import type { MemberRole } from '@/services/api/restMembersService';
 
 const ROLES: MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+const ASSIGNABLE_ROLES: MemberRole[] = ['admin', 'member', 'viewer'];
 
 const ROLE_COLORS: Record<MemberRole, string> = {
   owner: 'bg-purple-500/20 text-purple-300',
@@ -189,7 +190,7 @@ export function MembersTab({ isAdmin, currentUserId }: Props) {
               onChange={(e) => setProvRole(e.target.value as MemberRole)}
               className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white focus:border-blue-500 outline-none"
             >
-              {ROLES.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
+              {ASSIGNABLE_ROLES.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
             </select>
           </div>
           <div className="flex gap-2 justify-end">
@@ -224,7 +225,7 @@ export function MembersTab({ isAdmin, currentUserId }: Props) {
               onChange={(e) => setInviteRole(e.target.value as MemberRole)}
               className="px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-white focus:border-blue-500 outline-none"
             >
-              {ROLES.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
+              {ASSIGNABLE_ROLES.map((r) => <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>)}
             </select>
           </div>
           <div className="flex gap-2 justify-end">
@@ -294,7 +295,7 @@ export function MembersTab({ isAdmin, currentUserId }: Props) {
                             onChange={(e) => updateRole(member.id, e.target.value as MemberRole)}
                             className="appearance-none pl-2 pr-6 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-white focus:border-blue-500 outline-none cursor-pointer"
                           >
-                            {ROLES.map((r) => (
+                            {ASSIGNABLE_ROLES.map((r) => (
                               <option key={r} value={r}>{r.charAt(0).toUpperCase() + r.slice(1)}</option>
                             ))}
                           </select>

@@ -26,7 +26,10 @@ export type CanvasNodeType =
   | 'parallel'
   | 'end'
   | 'group'
-  | 'memo';
+  | 'memo'
+  | 'intentClassifier'
+  | 'faqLookup'
+  | 'channelReply';
 
 /**
  * Action execution status

@@ -52,7 +52,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
   // ==========================================================================
 
   fastify.get<{ Params: { id: string } }>('/:id/members', { preHandler: [authenticate] }, async (request, reply) => {
-    const members = await projectService.getMembers(request.params.id);
+    const members = await projectService.getMembers(request.user!.orgId, request.params.id, request.user!.id);
     return reply.send({ data: members });
   });
 
@@ -69,7 +69,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/members/:userId',
     { preHandler: [authenticate, requireModifyAccess] },
     async (request, reply) => {
-      await projectService.removeMember(request.params.id, request.params.userId);
+      await projectService.removeMember(request.user!.orgId, request.params.id, request.user!.id, request.params.userId);
       return reply.status(204).send();
     }
   );
@@ -91,7 +91,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const issues = await projectService.listIssues(request.params.id, request.query);
+      const issues = await projectService.listIssues(request.user!.orgId, request.params.id, request.user!.id, request.query);
       return reply.send({ data: issues });
     }
   );
@@ -100,7 +100,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const issue = await projectService.getIssue(request.params.id, request.params.issueId);
+      const issue = await projectService.getIssue(request.user!.orgId, request.params.id, request.params.issueId);
       return reply.send(issue);
     }
   );
@@ -109,7 +109,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const issue = await projectService.updateIssue(request.params.id, request.params.issueId, request.body);
+      const issue = await projectService.updateIssue(request.user!.orgId, request.params.id, request.params.issueId, request.body);
       return reply.send(issue);
     }
   );
@@ -118,7 +118,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId/status',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const issue = await projectService.changeIssueStatus(request.params.id, request.params.issueId, request.body.status);
+      const issue = await projectService.changeIssueStatus(request.user!.orgId, request.params.id, request.params.issueId, request.body.status);
       return reply.send(issue);
     }
   );
@@ -128,7 +128,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     { preHandler: [authenticate] },
     async (request, reply) => {
       const issue = await projectService.reorderIssue(
-        request.params.id, request.params.issueId,
+        request.user!.orgId, request.params.id, request.params.issueId,
         Number(request.body.sort_order), request.body.status,
       );
       return reply.send(issue);
@@ -139,7 +139,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      await projectService.deleteIssue(request.params.id, request.params.issueId);
+      await projectService.deleteIssue(request.user!.orgId, request.params.id, request.params.issueId);
       return reply.status(204).send();
     }
   );
@@ -161,7 +161,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId/comments',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const comments = await projectService.listComments(request.params.issueId);
+      const comments = await projectService.listComments(request.user!.orgId, request.params.id, request.params.issueId);
       return reply.send({ data: comments });
     }
   );
@@ -294,7 +294,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId/relations',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const relations = await governanceService.getIssueRelations(request.params.id, request.params.issueId);
+      const relations = await governanceService.getIssueRelations(request.user!.orgId, request.params.id, request.params.issueId);
       return reply.send({ data: relations });
     }
   );
@@ -306,7 +306,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/relations',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const relations = await governanceService.getProjectRelations(request.params.id);
+      const relations = await governanceService.getProjectRelations(request.user!.orgId, request.params.id);
       return reply.send({ data: relations });
     }
   );
@@ -318,7 +318,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/relations/:relationId/review',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      await governanceService.reviewRelation(request.params.relationId, request.user!.id, request.body.action);
+      await governanceService.reviewRelation(request.user!.orgId, request.params.id, request.params.relationId, request.user!.id, request.body.action);
       return reply.send({ ok: true });
     }
   );
@@ -358,7 +358,7 @@ export async function projectRoutes(fastify: FastifyInstance): Promise<void> {
     '/:id/issues/:issueId/diff',
     { preHandler: [authenticate] },
     async (request, reply) => {
-      const diff = await projectService.getIssueDiff(request.params.id, request.params.issueId);
+      const diff = await projectService.getIssueDiff(request.user!.orgId, request.params.id, request.params.issueId);
       return reply.send(diff);
     }
   );

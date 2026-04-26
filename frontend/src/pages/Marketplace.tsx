@@ -394,7 +394,7 @@ export function Marketplace() {
   )
 
   const handleAppClick = (app: PublishedApp) => {
-    navigate(`/marketplace/${app.id}`)
+    navigate(`/apps/${app.id}`)
   }
 
   const handleDeleteApp = useCallback(async () => {

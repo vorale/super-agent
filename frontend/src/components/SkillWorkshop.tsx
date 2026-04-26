@@ -9,7 +9,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Send, Loader2, Package, Search, Plus, X, Check,
   Download, ExternalLink, FileText, ChevronLeft, Save, Zap,
@@ -20,7 +20,7 @@ import { restClient } from '@/services/api/restClient';
 import {
   getEquippedSkills, equipSkill, unequipSkill, getInstalledSkills,
   saveWorkshopSkills, installMarketplaceSkill, streamWorkshopChat,
-  consolidateChatToSkill,
+  consolidateChatToSkill, resetWorkshopSession,
   type EquippedSkill,
 } from '@/services/workshopService';
 import { useTranslation } from '@/i18n';
@@ -135,8 +135,16 @@ function InstalledSkillRow({
 export function SkillWorkshop() {
   const { agentId } = useParams<{ agentId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { success: showSuccess, error: showError } = useToast();
   const { t } = useTranslation();
+
+  // Pre-equip skill ID from URL query param (e.g. ?skillId=xxx)
+  const preEquipSkillId = searchParams.get('skillId');
+  // Return path from URL query param (e.g. ?returnTo=/agents?scope=xxx)
+  const returnTo = searchParams.get('returnTo');
+  // Single-skill test mode: when skillId is provided, only equip that one skill
+  const isSingleSkillMode = !!preEquipSkillId;
 
   // Agent info
   const [agentName, setAgentName] = useState('Agent');
@@ -189,13 +197,47 @@ export function SkillWorkshop() {
       setAgentRole(res.data.role || '');
     }).catch(() => {});
 
+    // In single-skill mode, don't load existing equipped skills — we only want the target skill
+    if (isSingleSkillMode) {
+      setIsLoadingEquipped(false);
+      return;
+    }
+
     // Load equipped skills
     setIsLoadingEquipped(true);
     getEquippedSkills(agentId)
       .then(setEquippedSkills)
       .catch(err => setError(err.message))
       .finally(() => setIsLoadingEquipped(false));
-  }, [agentId]);
+  }, [agentId, isSingleSkillMode]);
+
+  // Auto-equip a skill from URL query param (?skillId=xxx)
+  const preEquipDoneRef = useRef(false);
+  useEffect(() => {
+    if (!agentId || !preEquipSkillId || preEquipDoneRef.current) return;
+    preEquipDoneRef.current = true;
+
+    async function setupSingleSkill() {
+      try {
+        if (isSingleSkillMode) {
+          // Reset the backend workshop session to empty, then equip only the target skill
+          await resetWorkshopSession(agentId!);
+        }
+        const skill = await equipSkill(agentId!, preEquipSkillId!);
+        if (isSingleSkillMode) {
+          setEquippedSkills([skill]);
+        } else {
+          setEquippedSkills(prev => {
+            if (prev.some(s => s.id === skill.id)) return prev;
+            return [...prev, skill];
+          });
+        }
+      } catch {
+        // Skill may not be found — ignore
+      }
+    }
+    setupSingleSkill();
+  }, [agentId, preEquipSkillId, isSingleSkillMode]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -227,7 +269,10 @@ export function SkillWorkshop() {
 
     try {
       console.log('[SkillWorkshop] Sending message, sessionId:', chatSessionIdRef.current);
-      const { reader: readerPromise } = streamWorkshopChat(agentId, userMsg.content, chatSessionIdRef.current || undefined);
+      const skillTestPrompt = isSingleSkillMode
+        ? `You are a skill testing assistant. Your only job is to test the equipped skill by following its instructions precisely. Do not assume any other role or identity. Focus on demonstrating the skill's capabilities.`
+        : undefined;
+      const { reader: readerPromise } = streamWorkshopChat(agentId, userMsg.content, chatSessionIdRef.current || undefined, skillTestPrompt);
       const reader = await readerPromise;
       const decoder = new TextDecoder();
       let buffer = '';
@@ -456,7 +501,7 @@ export function SkillWorkshop() {
       {/* Header */}
       <header className="border-b border-gray-800 px-4 py-3 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate(`/agents/config/${agentId}`)}
+          <button onClick={() => navigate(returnTo || `/agents/config/${agentId}`)}
             className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors">
             <ArrowLeft className="w-5 h-5" />
           </button>

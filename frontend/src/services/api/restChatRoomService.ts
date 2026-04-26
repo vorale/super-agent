@@ -15,6 +15,7 @@ export interface RoomMember {
   agent_id: string;
   role: 'primary' | 'member';
   is_active: boolean;
+  source_scope_id: string | null;
   joined_at: string;
   agent: {
     id: string;
@@ -24,6 +25,7 @@ export interface RoomMember {
     avatar: string | null;
     system_prompt: string | null;
     status: string;
+    business_scope_id: string | null;
   };
 }
 
@@ -89,6 +91,14 @@ export const RestChatRoomService = {
     return restClient.post<ChatRoom>('/api/chat/rooms/from-scope', { business_scope_id: businessScopeId });
   },
 
+  async createCrossScopeRoom(options: {
+    title?: string;
+    primary_scope_id?: string;
+    members: Array<{ agent_id: string; scope_id: string }>;
+  }): Promise<ChatRoom> {
+    return restClient.post<ChatRoom>('/api/chat/rooms/cross-scope', options);
+  },
+
   async getRoom(roomId: string): Promise<ChatRoom> {
     return restClient.get<ChatRoom>(`/api/chat/rooms/${roomId}`);
   },
@@ -103,8 +113,11 @@ export const RestChatRoomService = {
     return res.members;
   },
 
-  async addMember(roomId: string, agentId: string): Promise<void> {
-    await restClient.post(`/api/chat/rooms/${roomId}/members`, { agent_id: agentId });
+  async addMember(roomId: string, agentId: string, sourceScopeId?: string): Promise<void> {
+    await restClient.post(`/api/chat/rooms/${roomId}/members`, {
+      agent_id: agentId,
+      source_scope_id: sourceScopeId,
+    });
   },
 
   async removeMember(roomId: string, agentId: string): Promise<void> {

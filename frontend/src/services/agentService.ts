@@ -311,6 +311,9 @@ export interface IAgentService {
   deleteAgent(id: string): Promise<void>;
   getAgentsByDepartment(department: Department): Promise<Agent[]>;
   getAgentsByBusinessScope?(businessScopeId: string): Promise<Agent[]>;
+  bindAgentToScope?(agentId: string, businessScopeId: string): Promise<void>;
+  unbindAgentFromScope?(agentId: string, businessScopeId: string): Promise<void>;
+  getAgentScopes?(agentId: string): Promise<Array<{ id: string; agent_id: string; business_scope_id: string; is_primary: boolean; assigned_at: string }>>;
   resetStore?(): void;
   getMockAgents?(): Agent[];
 }

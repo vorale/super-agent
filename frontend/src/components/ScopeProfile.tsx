@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Server, Plus, Trash2, Loader2, Briefcase,
   Users, Zap, TrendingUp, BarChart3,
@@ -18,6 +19,7 @@ import { DocGroupsPanel } from './DocGroupsPanel'
 import { RehearsalPanel } from './RehearsalPanel'
 import { MCPCatalogPanel, type CustomMcpServer } from './MCPCatalogPanel'
 import { ConnectorPanel } from './ConnectorPanel'
+import { SkillsPanel } from './SkillsPanel'
 import {
   getAvatarDisplayUrl,
   getAvatarFallback,
@@ -39,7 +41,7 @@ interface ScopeProfileProps {
   allAgents?: Agent[]
   onDeleteScope?: (scopeId: string) => void
   onAddAgent?: (agentId: string, scopeId: string) => void
-  onRemoveAgent?: (agentId: string) => void
+  onRemoveAgent?: (agentId: string, scopeId: string) => void
 }
 
 interface ScopeMcpServer {
@@ -300,6 +302,7 @@ function AgentRow({ agent }: { agent: Agent }) {
 export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onAddAgent, onRemoveAgent }: ScopeProfileProps) {
   const { success, error: showError } = useToast()
   const { servers: allServers, getServers, createServer } = useMCP()
+  const navigate = useNavigate()
 
   const [scopeServers, setScopeServers] = useState<ScopeMcpServer[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -515,7 +518,7 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
 
   const handleRemoveAgentFromScope = async (agent: Agent) => {
     if (onRemoveAgent) {
-      await onRemoveAgent(agent.id)
+      await onRemoveAgent(agent.id, scope.id)
       success(`Removed "${agent.displayName}" from scope`)
     }
   }
@@ -531,6 +534,7 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
   // Scope-level skills
   const [scopeSkills, setScopeSkills] = useState<Array<{ id: string; name: string; description: string | null; skill_type: string }>>([])
   const [skillsLoading, setSkillsLoading] = useState(true)
+  const [showSkillsPanel, setShowSkillsPanel] = useState(false)
 
   useEffect(() => {
     setPromptDraft(scope.systemPrompt || '')
@@ -553,6 +557,17 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
     }
     loadScopeSkills()
     return () => { cancelled = true }
+  }, [scope.id])
+
+  const reloadScopeSkills = useCallback(async () => {
+    try {
+      const res = await restClient.get<{ data: Array<{ id: string; name: string; description: string | null; skill_type: string }> }>(
+        `/api/skills?business_scope_id=${scope.id}&limit=100`
+      )
+      setScopeSkills(res.data || [])
+    } catch {
+      // ignore
+    }
   }, [scope.id])
 
   const handleSavePrompt = async () => {
@@ -743,6 +758,16 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
         </div>
 
         {/* ============================================================ */}
+        {/*  Model Configuration                                          */}
+        {/* ============================================================ */}
+        <ModelConfigSection scope={scope} onSave={async (modelId) => {
+          await restClient.put(`/api/business-scopes/${scope.id}`, {
+            settings: { ...(scope.settings || {}), modelId: modelId || undefined },
+          })
+          success('Model saved')
+        }} onError={showError} />
+
+        {/* ============================================================ */}
         {/*  Scope Skills                                                 */}
         {/* ============================================================ */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden p-4">
@@ -752,6 +777,13 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
               <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Skills</h3>
               <span className="text-[10px] text-gray-600">{scopeSkills.length} {t('scopeProfile.skillsEquipped')}</span>
             </div>
+            <button
+              onClick={() => setShowSkillsPanel(true)}
+              className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-colors"
+            >
+              <Plus className="w-3 h-3" />
+              Add
+            </button>
           </div>
           {skillsLoading ? (
             <div className="py-4 text-center text-xs text-gray-500">{t('scopeProfile.loadingSkills')}</div>
@@ -763,18 +795,35 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
             </div>
           ) : (
             <div className="space-y-1.5">
-              {scopeSkills.map(skill => (
-                <div key={skill.id} className="flex items-start gap-2 px-2.5 py-2 bg-gray-800/50 rounded-lg min-w-0">
-                  <Sparkles className="w-3 h-3 text-yellow-500/60 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0 overflow-hidden">
-                    <span className="text-xs text-gray-200 font-medium">{skill.name}</span>
-                    {skill.description && (
-                      <p className="text-[10px] text-gray-500 line-clamp-2">{skill.description}</p>
+              {scopeSkills.map(skill => {
+                // Use the first agent in the scope for workshop testing;
+                // fall back to any agent in the org (skill testing doesn't depend on the specific agent)
+                const workshopAgentId = agents.length > 0
+                  ? agents[0].id
+                  : (allAgents.length > 0 ? allAgents[0].id : null)
+                return (
+                  <div key={skill.id} className="flex items-start gap-2 px-2.5 py-2 bg-gray-800/50 rounded-lg min-w-0">
+                    <Sparkles className="w-3 h-3 text-yellow-500/60 flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                      <span className="text-xs text-gray-200 font-medium">{skill.name}</span>
+                      {skill.description && (
+                        <p className="text-[10px] text-gray-500 line-clamp-2">{skill.description}</p>
+                      )}
+                    </div>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500 flex-shrink-0">{skill.skill_type}</span>
+                    {workshopAgentId && (
+                      <button
+                        onClick={() => navigate(`/agents/config/${workshopAgentId}/workshop?skillId=${skill.id}&returnTo=${encodeURIComponent(`/agents?scope=${scope.id}`)}`)}
+                        className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-colors flex-shrink-0"
+                        title={t('scopeProfile.testSkill')}
+                      >
+                        <Zap className="w-2.5 h-2.5" />
+                        {t('scopeProfile.testSkill')}
+                      </button>
                     )}
                   </div>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500 flex-shrink-0">{skill.skill_type}</span>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -1069,6 +1118,14 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
         </div>
       </div>
 
+      {/* Skills Panel slide-out */}
+      <SkillsPanel
+        open={showSkillsPanel}
+        onClose={() => setShowSkillsPanel(false)}
+        scopeId={scope.id}
+        onScopeSkillsChanged={reloadScopeSkills}
+      />
+
       {/* MCP Server Catalog slide-out panel */}
       <MCPCatalogPanel
         open={showCatalogPanel}
@@ -1077,6 +1134,86 @@ export function ScopeProfile({ scope, agents, allAgents = [], onDeleteScope, onA
         onInstall={handleCatalogInstall}
         onCustomInstall={handleCustomInstall}
       />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Model Configuration Section                                        */
+/* ------------------------------------------------------------------ */
+
+function ModelConfigSection({ scope, onSave, onError }: {
+  scope: { settings?: Record<string, unknown> | null }
+  onSave: (modelId: string) => Promise<void>
+  onError: (msg: string) => void
+}) {
+  const initialModelId = (scope.settings as Record<string, unknown>)?.modelId as string || ''
+  const [selectedModelId, setSelectedModelId] = useState(initialModelId)
+  const [isSaving, setIsSaving] = useState(false)
+  const [models, setModels] = useState<Array<{ id: string; litellm_model: string; provider: string }>>([])
+  const [isLoadingModels, setIsLoadingModels] = useState(true)
+
+  // Sync if parent scope changes (e.g. switching between scopes)
+  useEffect(() => {
+    setSelectedModelId((scope.settings as Record<string, unknown>)?.modelId as string || '')
+  }, [scope.settings])
+
+  useEffect(() => {
+    restClient.get<{ data: Array<{ id: string; litellm_model: string; provider: string }> }>('/api/litellm/models')
+      .then(res => setModels(res.data || []))
+      .catch(() => setModels([]))
+      .finally(() => setIsLoadingModels(false))
+  }, [])
+
+  const handleSelect = async (litellmModel: string) => {
+    const prev = selectedModelId
+    setSelectedModelId(litellmModel)
+    setIsSaving(true)
+    try {
+      await onSave(litellmModel)
+    } catch (err) {
+      setSelectedModelId(prev)
+      onError(err instanceof Error ? err.message : 'Failed to save model')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-purple-400" />
+          <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Model</h3>
+        </div>
+        {isSaving && <Loader2 className="w-3 h-3 animate-spin text-purple-400" />}
+      </div>
+      <div className="space-y-2">
+        {isLoadingModels ? (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-gray-500">
+            <Loader2 className="w-3 h-3 animate-spin" /> Loading models...
+          </div>
+        ) : models.length === 0 ? (
+          <p className="text-xs text-gray-500 px-1">No models available. Configure LITELLM_BASE_URL in backend .env.</p>
+        ) : (
+          <select
+            value={selectedModelId}
+            onChange={e => handleSelect(e.target.value)}
+            disabled={isSaving}
+            className="w-full px-3 py-2 text-xs bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-purple-500 focus:outline-none font-mono appearance-none cursor-pointer disabled:opacity-50"
+          >
+            <option value="">Default (runtime setting)</option>
+            {models.map(m => (
+              <option key={m.litellm_model} value={m.litellm_model}>
+                {m.id} — {m.provider}
+              </option>
+            ))}
+          </select>
+        )}
+        <p className="text-[10px] text-gray-500">
+          Default model for this scope. Changes take effect on the next conversation.
+        </p>
+      </div>
     </div>
   )
 }

@@ -17,6 +17,7 @@ export interface IMChannelBindingEntity {
   webhook_url: string | null;
   config: Record<string, unknown>;
   is_enabled: boolean;
+  sticky_session_id: string | null;
   created_by: string | null;
   created_at: Date;
   updated_at: Date;
@@ -105,6 +106,20 @@ export class IMChannelRepository {
     await prisma.im_channel_bindings.delete({ where: { id } });
     return true;
   }
+
+  /**
+   * Update the sticky session ID for a binding.
+   * Used by IM sticky session logic to persist the "main" session reference.
+   */
+  async updateStickySession(
+    bindingId: string,
+    stickySessionId: string | null,
+  ): Promise<void> {
+    await prisma.im_channel_bindings.update({
+      where: { id: bindingId },
+      data: { sticky_session_id: stickySessionId },
+    });
+  }
 }
 
 export class IMThreadSessionRepository {
@@ -121,6 +136,29 @@ export class IMThreadSessionRepository {
     data: Omit<IMThreadSessionEntity, 'id' | 'created_at'>,
   ): Promise<IMThreadSessionEntity> {
     return prisma.im_thread_sessions.create({ data }) as Promise<IMThreadSessionEntity>;
+  }
+
+  /**
+   * Upsert a thread→session mapping.
+   * If the (binding_id, thread_id) pair already exists, update the session_id.
+   * Otherwise, create a new mapping.
+   */
+  async upsert(
+    data: Omit<IMThreadSessionEntity, 'id' | 'created_at'>,
+  ): Promise<IMThreadSessionEntity> {
+    return prisma.im_thread_sessions.upsert({
+      where: {
+        unique_thread_per_binding: {
+          binding_id: data.binding_id,
+          thread_id: data.thread_id,
+        },
+      },
+      update: {
+        session_id: data.session_id,
+        im_user_id: data.im_user_id,
+      },
+      create: data,
+    }) as Promise<IMThreadSessionEntity>;
   }
 }
 

@@ -95,6 +95,20 @@ export type {
   UpdateScheduleRequest,
 } from './restScheduleService';
 
+export { RestSupportService } from './restSupportService';
+export type {
+  SupportConversation,
+  CustomerProfile,
+  FaqArticle,
+  AgentGroup,
+  EscalationRule,
+  ResponseTemplate,
+  BusinessHoursConfig,
+  MetricsSummary,
+  KnowledgeGap,
+  GapReport,
+} from './restSupportService';
+
 // =============================================================================
 // API Mode Detection
 // =============================================================================

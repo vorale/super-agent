@@ -21,7 +21,7 @@ const JWT_SECRET = 'super-agent-local-dev-secret-change-in-production';
 // These come from the local DB — adjust if your seed data differs.
 const TEST_USER = {
   sub: 'a7495755-996e-47fb-8bab-eca0d8c23681',
-  email: 'email@email.com',
+  email: 'fredzh@amazon.com',
   orgId: 'eb2f01e7-9a0a-4aff-bc42-a66ef3903da9',
   role: 'admin' as const,
 };

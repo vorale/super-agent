@@ -43,6 +43,7 @@
     "@fastify/swagger-ui": "^5.2.4",
     "@fastify/websocket": "^11.2.0",
     "@larksuiteoapi/node-sdk": "^1.60.0",
+    "@wecom/aibot-node-sdk": "^1.0.6",
     "@prisma/adapter-pg": "^7.2.0",
     "@prisma/client": "^7.2.0",
     "@types/js-yaml": "^4.0.9",

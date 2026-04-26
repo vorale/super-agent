@@ -83,6 +83,7 @@ export class SlackAdapter implements IMAdapter {
       threadId,
       userId: payload.event.user,
       text: payload.event.text.trim(),
+      isExplicitThread: !!payload.event.thread_ts,
     };
   }
 

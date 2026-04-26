@@ -54,7 +54,11 @@ interface EnterpriseSkill {
 interface SkillsPanelProps {
   open: boolean
   onClose: () => void
-  sessionId: string | null
+  sessionId?: string | null
+  /** When provided, the panel operates in scope-binding mode instead of workspace mode */
+  scopeId?: string | null
+  /** Called after a skill is bound/unbound in scope mode so the parent can refresh */
+  onScopeSkillsChanged?: () => void
 }
 
 type Tab = 'installed' | 'enterprise' | 'external'
@@ -85,13 +89,20 @@ function TabButton({ active, onClick, icon, label }: {
 // Component
 // ---------------------------------------------------------------------------
 
-export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
+export function SkillsPanel({ open, onClose, sessionId, scopeId, onScopeSkillsChanged }: SkillsPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('installed')
   const { t } = useTranslation()
 
-  // Installed (workspace) skills
+  // Determine mode
+  const isScopeMode = !!scopeId
+
+  // Installed (workspace) skills — used in session mode
   const [installedSkills, setInstalledSkills] = useState<WorkspaceSkill[]>([])
   const [loadingInstalled, setLoadingInstalled] = useState(false)
+
+  // Scope-level skills — used in scope mode
+  const [scopeSkills, setScopeSkills] = useState<Array<{ id: string; name: string; display_name: string; description: string | null; skill_type: string }>>([])
+  const [loadingScopeSkills, setLoadingScopeSkills] = useState(false)
 
   // Enterprise catalog
   const [enterpriseSkills, setEnterpriseSkills] = useState<EnterpriseSkill[]>([])
@@ -126,7 +137,7 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
   // Deleting
   const [deletingSkill, setDeletingSkill] = useState<string | null>(null)
 
-  // ── Load installed skills ──
+  // ── Load installed skills (session workspace mode) ──
   const loadInstalled = useCallback(async () => {
     if (!sessionId) return
     setLoadingInstalled(true)
@@ -142,6 +153,23 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
       setLoadingInstalled(false)
     }
   }, [sessionId])
+
+  // ── Load scope-level skills (scope binding mode) ──
+  const loadScopeSkills = useCallback(async () => {
+    if (!scopeId) return
+    setLoadingScopeSkills(true)
+    setError(null)
+    try {
+      const res = await restClient.get<{ data: Array<{ id: string; name: string; display_name: string; description: string | null; skill_type: string }> }>(
+        `/api/skills?business_scope_id=${scopeId}&limit=100`,
+      )
+      setScopeSkills(res.data || [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load scope skills')
+    } finally {
+      setLoadingScopeSkills(false)
+    }
+  }, [scopeId])
 
   // ── Load enterprise catalog ──
   const loadEnterprise = useCallback(async () => {
@@ -189,13 +217,17 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
 
   useEffect(() => {
     if (open) {
-      void loadInstalled()
+      if (isScopeMode) {
+        void loadScopeSkills()
+      } else {
+        void loadInstalled()
+      }
       void loadEnterprise()
       void loadCategories()
       void loadFeatured()
       void loadUserGroups()
     }
-  }, [open, loadInstalled, loadEnterprise, loadCategories, loadFeatured, loadUserGroups])
+  }, [open, isScopeMode, loadInstalled, loadScopeSkills, loadEnterprise, loadCategories, loadFeatured, loadUserGroups])
 
   // ── External marketplace search ──
   const handleExternalSearch = useCallback(async () => {
@@ -220,14 +252,21 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
     setInstallingRef(installRef)
     setError(null)
     try {
-      await restClient.post('/api/skills/marketplace/install', { installRef, sessionId })
-      await loadInstalled()
+      const res = await restClient.post<{ data: { skillId: string; name: string } }>('/api/skills/marketplace/install', { installRef, sessionId: isScopeMode ? undefined : sessionId })
+      if (isScopeMode && scopeId && res.data?.skillId) {
+        // Bind the newly installed skill to the scope
+        await restClient.post(`/api/business-scopes/${scopeId}/skills/${res.data.skillId}`, {})
+        await loadScopeSkills()
+        onScopeSkillsChanged?.()
+      } else {
+        await loadInstalled()
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Install failed')
     } finally {
       setInstallingRef(null)
     }
-  }, [loadInstalled, sessionId])
+  }, [isScopeMode, scopeId, loadInstalled, loadScopeSkills, sessionId, onScopeSkillsChanged])
 
   // ── Import from external → enterprise ──
   const handleImportToEnterprise = useCallback(async (installRef: string) => {
@@ -243,21 +282,31 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
     }
   }, [loadEnterprise])
 
-  // ── Install from enterprise → workspace ──
+  // ── Install from enterprise → workspace or scope ──
   const handleEnterpriseInstall = useCallback(async (id: string) => {
-    if (!sessionId) return
     setInstallingEntId(id)
     setError(null)
     try {
-      await restClient.post(`/api/skills/enterprise/${id}/install`, { sessionId })
-      await loadInstalled()
+      if (isScopeMode && scopeId) {
+        // In scope mode: find the skill's underlying skillId and bind to scope
+        const skill = enterpriseSkills.find(s => s.id === id)
+        if (skill?.skillId) {
+          await restClient.post(`/api/business-scopes/${scopeId}/skills/${skill.skillId}`, {})
+        }
+        await loadScopeSkills()
+        onScopeSkillsChanged?.()
+      } else {
+        if (!sessionId) return
+        await restClient.post(`/api/skills/enterprise/${id}/install`, { sessionId })
+        await loadInstalled()
+      }
       await loadEnterprise() // refresh install counts
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Install failed')
     } finally {
       setInstallingEntId(null)
     }
-  }, [sessionId, loadInstalled, loadEnterprise])
+  }, [isScopeMode, scopeId, sessionId, enterpriseSkills, loadInstalled, loadScopeSkills, loadEnterprise, onScopeSkillsChanged])
 
   // ── Vote ──
   const handleVote = useCallback(async (id: string, vote: 1 | -1) => {
@@ -309,24 +358,45 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
     }
   }, [sessionId, publishCategory, publishGroupIds, loadEnterprise])
 
-  // ── Delete from workspace ──
+  // ── Delete from workspace or unbind from scope ──
   const handleDelete = useCallback(async (skillName: string) => {
-    if (!sessionId) return
-    setDeletingSkill(skillName)
-    setError(null)
-    try {
-      await restClient.delete(
-        `/api/chat/sessions/${sessionId}/workspace/skills/${encodeURIComponent(skillName)}`,
-      )
-      await loadInstalled()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed')
-    } finally {
-      setDeletingSkill(null)
+    if (isScopeMode && scopeId) {
+      // In scope mode: unbind skill from scope
+      const skill = scopeSkills.find(s => s.name === skillName)
+      if (!skill) return
+      setDeletingSkill(skillName)
+      setError(null)
+      try {
+        await restClient.delete(`/api/business-scopes/${scopeId}/skills/${skill.id}`)
+        await loadScopeSkills()
+        onScopeSkillsChanged?.()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to remove skill from scope')
+      } finally {
+        setDeletingSkill(null)
+      }
+    } else {
+      if (!sessionId) return
+      setDeletingSkill(skillName)
+      setError(null)
+      try {
+        await restClient.delete(
+          `/api/chat/sessions/${sessionId}/workspace/skills/${encodeURIComponent(skillName)}`,
+        )
+        await loadInstalled()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Delete failed')
+      } finally {
+        setDeletingSkill(null)
+      }
     }
-  }, [sessionId, loadInstalled])
+  }, [isScopeMode, scopeId, scopeSkills, sessionId, loadInstalled, loadScopeSkills, onScopeSkillsChanged])
 
-  const installedNames = new Set(installedSkills.map(s => s.name))
+  const installedNames = new Set(
+    isScopeMode
+      ? scopeSkills.map(s => s.name)
+      : installedSkills.map(s => s.name)
+  )
 
   if (!open) return null
 
@@ -351,7 +421,7 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
         {/* Tabs */}
         <div className="flex items-center gap-1.5 px-4 py-2 border-b border-gray-800">
           <TabButton active={activeTab === 'installed'} onClick={() => setActiveTab('installed')}
-            icon={<Zap className="w-3 h-3" />} label={`${t('skills.tabInstalled')} (${installedSkills.length})`} />
+            icon={<Zap className="w-3 h-3" />} label={`${t('skills.tabInstalled')} (${isScopeMode ? scopeSkills.length : installedSkills.length})`} />
           <TabButton active={activeTab === 'enterprise'} onClick={() => setActiveTab('enterprise')}
             icon={<Building2 className="w-3 h-3" />} label={t('skills.tabInternal')} />
           <TabButton active={activeTab === 'external'} onClick={() => setActiveTab('external')}
@@ -370,22 +440,31 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
           {activeTab === 'installed' && (
-            <InstalledTab
-              skills={installedSkills}
-              loading={loadingInstalled}
-              sessionId={sessionId}
-              publishingSkill={publishingSkill}
-              confirmingPublish={confirmingPublish}
-              publishCategory={publishCategory}
-              publishGroupIds={publishGroupIds}
-              userGroups={userGroups}
-              onPublishCategoryChange={setPublishCategory}
-              onPublishGroupIdsChange={setPublishGroupIds}
-              onPublishStart={handlePublishStart}
-              onPublishConfirm={handlePublishConfirm}
-              onDelete={handleDelete}
-              deletingSkill={deletingSkill}
-            />
+            isScopeMode ? (
+              <ScopeInstalledTab
+                skills={scopeSkills}
+                loading={loadingScopeSkills}
+                onDelete={handleDelete}
+                deletingSkill={deletingSkill}
+              />
+            ) : (
+              <InstalledTab
+                skills={installedSkills}
+                loading={loadingInstalled}
+                sessionId={sessionId ?? null}
+                publishingSkill={publishingSkill}
+                confirmingPublish={confirmingPublish}
+                publishCategory={publishCategory}
+                publishGroupIds={publishGroupIds}
+                userGroups={userGroups}
+                onPublishCategoryChange={setPublishCategory}
+                onPublishGroupIdsChange={setPublishGroupIds}
+                onPublishStart={handlePublishStart}
+                onPublishConfirm={handlePublishConfirm}
+                onDelete={handleDelete}
+                deletingSkill={deletingSkill}
+              />
+            )
           )}
           {activeTab === 'enterprise' && (
             <EnterpriseTab
@@ -398,7 +477,8 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
               installedNames={installedNames}
               installingId={installingEntId}
               votingId={votingId}
-              sessionId={sessionId}
+              sessionId={sessionId ?? null}
+              canInstall={isScopeMode || !!sessionId}
               onQueryChange={setEnterpriseQuery}
               onCategoryChange={setEnterpriseCategory}
               onSortChange={setEnterpriseSort}
@@ -429,6 +509,63 @@ export function SkillsPanel({ open, onClose, sessionId }: SkillsPanelProps) {
   )
 }
 
+
+// ---------------------------------------------------------------------------
+// Scope Installed Tab (for scope binding mode)
+// ---------------------------------------------------------------------------
+
+function ScopeInstalledTab({ skills, loading, onDelete, deletingSkill }: {
+  skills: Array<{ id: string; name: string; display_name: string; description: string | null; skill_type: string }>
+  loading: boolean
+  onDelete: (name: string) => void
+  deletingSkill: string | null
+}) {
+  const { t } = useTranslation()
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-8">
+        <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+      </div>
+    )
+  }
+  if (skills.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <Package className="w-8 h-8 text-gray-700 mx-auto mb-1" />
+        <p className="text-xs text-gray-500">{t('skills.noSkills')}</p>
+        <p className="text-[10px] text-gray-600 mt-1">{t('scopeProfile.noSkillsHint')}</p>
+      </div>
+    )
+  }
+  return (
+    <div className="px-4 py-3 space-y-1.5">
+      {skills.map(skill => (
+        <div key={skill.id} className="px-3 py-2 bg-gray-800/60 border border-gray-700/50 rounded-lg">
+          <div className="flex items-center gap-2">
+            <Zap className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
+            <div className="flex-1 min-w-0">
+              <span className="text-sm text-white block truncate">{skill.display_name || skill.name}</span>
+              {skill.description && <span className="text-xs text-gray-500 block truncate">{skill.description}</span>}
+            </div>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-gray-700/50 text-gray-500 flex-shrink-0">{skill.skill_type}</span>
+            <button
+              onClick={() => onDelete(skill.name)}
+              disabled={deletingSkill === skill.name}
+              className="p-1 rounded hover:bg-red-500/20 text-gray-600 hover:text-red-400 transition-colors flex-shrink-0"
+              title="Remove from scope"
+            >
+              {deletingSkill === skill.name ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Installed Tab
@@ -572,7 +709,7 @@ function InstalledTab({ skills, loading, sessionId, publishingSkill, confirmingP
 // Enterprise Tab
 // ---------------------------------------------------------------------------
 
-function EnterpriseTab({ skills, loading, categories, query, category, sort, installedNames, installingId, votingId, sessionId, onQueryChange, onCategoryChange, onSortChange, onSearch, onInstall, onVote }: {
+function EnterpriseTab({ skills, loading, categories, query, category, sort, installedNames, installingId, votingId, sessionId, canInstall, onQueryChange, onCategoryChange, onSortChange, onSearch, onInstall, onVote }: {
   skills: EnterpriseSkill[]
   loading: boolean
   categories: string[]
@@ -583,6 +720,7 @@ function EnterpriseTab({ skills, loading, categories, query, category, sort, ins
   installingId: string | null
   votingId: string | null
   sessionId: string | null
+  canInstall: boolean
   onQueryChange: (v: string) => void
   onCategoryChange: (v: string) => void
   onSortChange: (v: 'popular' | 'recent' | 'top-rated') => void
@@ -682,7 +820,7 @@ function EnterpriseTab({ skills, loading, categories, query, category, sort, ins
                       <span className="flex items-center gap-1 text-[10px] text-green-400">
                         <Check className="w-3 h-3" /> {t('skills.installed')}
                       </span>
-                    ) : sessionId ? (
+                    ) : canInstall ? (
                       <button onClick={() => onInstall(skill.id)} disabled={installingId === skill.id}
                         className="flex items-center gap-1 px-2 py-0.5 text-[10px] bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 text-white rounded transition-colors">
                         {installingId === skill.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}

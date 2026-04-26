@@ -57,8 +57,9 @@ export async function buildApp(): Promise<FastifyInstance> {
     genReqId: () => crypto.randomUUID(),
     // Disable default request logging (we use custom hooks)
     disableRequestLogging: true,
-    // Increase body limit to 50MB to support large document uploads (base64-encoded)
-    bodyLimit: 52428800, // 50MB
+    // Increase body limit to 200MB to support large file uploads (base64-encoded
+    // 100MB file → ~134MB base64 payload, plus JSON overhead)
+    bodyLimit: 200 * 1024 * 1024, // 200MB
   });
 
   // Register global error handler
@@ -93,7 +94,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Register multipart support for file uploads (SOP documents, etc.)
   await app.register(multipart, {
     limits: {
-      fileSize: 20 * 1024 * 1024, // 20MB max file size
+      fileSize: 100 * 1024 * 1024, // 100MB max file size
       files: 1, // single file per request
     },
   });

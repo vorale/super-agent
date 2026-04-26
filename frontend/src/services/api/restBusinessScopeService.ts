@@ -26,6 +26,7 @@ interface ApiBusinessScope {
   avatar?: string | null;
   role?: string | null;
   system_prompt?: string | null;
+  settings?: Record<string, unknown> | null;
 }
 
 /**
@@ -137,6 +138,7 @@ function mapApiBusinessScopeToBusinessScope(apiScope: ApiBusinessScope): Busines
     avatar: apiScope.avatar,
     role: apiScope.role,
     systemPrompt: apiScope.system_prompt,
+    settings: apiScope.settings,
   };
 }
 

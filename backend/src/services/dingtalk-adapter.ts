@@ -101,6 +101,7 @@ export class DingTalkAdapter implements IMAdapter {
       userId: payload.senderStaffId || 'unknown',
       userName: payload.senderNick,
       text: payload.text.content.trim(),
+      isExplicitThread: false, // DingTalk has no thread/topic concept
     };
   }
 
@@ -245,6 +246,7 @@ export class DingTalkAdapter implements IMAdapter {
             userName: data.senderNick,
             text: content,
             bindingId: bindingId,
+            isExplicitThread: false, // DingTalk has no thread/topic concept
           };
 
           await imQueueService.enqueue(normalized, {

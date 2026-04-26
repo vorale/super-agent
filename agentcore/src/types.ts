@@ -14,6 +14,8 @@ export interface AgentPayload {
   org_id?: string;
   agent_id?: string;
   system_prompt?: string;
+  /** Model identifier to use for this invocation (overrides ANTHROPIC_MODEL env var). */
+  model?: string;
   mcp_servers?: Record<string, unknown>;
   allowed_tools?: string[];
   history?: Array<{ role: 'user' | 'assistant'; content: string }>;
@@ -50,6 +52,7 @@ export interface AgentEvent {
   type: 'session_start' | 'assistant' | 'result' | 'error';
   session_id?: string;
   content?: ContentBlock[];
+  model?: string;
   code?: string;
   message?: string;
   duration_ms?: number;

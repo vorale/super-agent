@@ -34,6 +34,9 @@ export interface ChatContextType extends ChatSessionState {
   setActiveSop: (sopId: string) => void
   setSelectedAgent: (agentId: string | null) => void
   setSelectedBusinessScope: (scopeId: string) => void
+  /** Currently selected model override (null = use scope default). */
+  selectedModel: string | null
+  setSelectedModel: (model: string | null) => void
   clearHistory: () => Promise<void>
   clearError: () => void
   refreshContext: () => Promise<void>
@@ -67,6 +70,8 @@ const defaultContext: ChatContextType = {
   setActiveSop: () => {},
   setSelectedAgent: () => {},
   setSelectedBusinessScope: () => {},
+  selectedModel: null,
+  setSelectedModel: () => {},
   clearHistory: async () => {},
   clearError: () => {},
   refreshContext: async () => {},
@@ -118,6 +123,7 @@ export function ChatProvider({ children, initialSessionId, initialSop, initialAg
   const [activeSop, setActiveSopState] = useState<string>(() => initialSop || getStoredSop())
   const [selectedAgentId, setSelectedAgentIdState] = useState<string | null>(() => initialAgentId || getStoredAgentId())
   const [selectedBusinessScopeId, setSelectedBusinessScopeIdState] = useState<string | null>(() => initialScopeId || getStoredScopeId())
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [context, setContext] = useState<ChatContextData | null>(null)
   const [quickQuestions, setQuickQuestions] = useState<QuickQuestion[]>([])
   const [quickQuestionsLoading, setQuickQuestionsLoading] = useState(false)
@@ -312,6 +318,7 @@ export function ChatProvider({ children, initialSessionId, initialSop, initialAg
           businessScopeId: selectedBusinessScopeId || undefined,
           agentId: selectedAgentId || undefined,
           mentionAgentId: mentionAgentId || undefined,
+          model: selectedModel || undefined,
           sopContext: activeSop,
         })
 
@@ -480,6 +487,8 @@ export function ChatProvider({ children, initialSessionId, initialSop, initialAg
     setActiveSop,
     setSelectedAgent,
     setSelectedBusinessScope,
+    selectedModel,
+    setSelectedModel,
     clearHistory,
     clearError,
     refreshContext,

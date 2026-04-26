@@ -45,8 +45,9 @@ export class TelegramAdapter implements IMAdapter {
     if (!update.message?.text) return null;
 
     const msg = update.message;
-    const threadId = msg.reply_to_message
-      ? String(msg.reply_to_message.message_id)
+    const hasReply = !!msg.reply_to_message;
+    const threadId = hasReply
+      ? String(msg.reply_to_message!.message_id)
       : String(msg.message_id);
 
     return {
@@ -56,6 +57,7 @@ export class TelegramAdapter implements IMAdapter {
       userId: String(msg.from?.id ?? 'unknown'),
       userName: msg.from?.username || msg.from?.first_name || undefined,
       text: msg.text!,
+      isExplicitThread: hasReply,
     };
   }
 

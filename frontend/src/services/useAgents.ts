@@ -16,6 +16,8 @@ export interface UseAgentsReturn extends UseAgentsState {
   updateAgent: (id: string, data: Partial<Agent>) => Promise<Agent | null>
   deleteAgent: (id: string) => Promise<boolean>
   getAgentsByDepartment: (department: Department) => Promise<Agent[]>
+  bindAgentToScope: (agentId: string, businessScopeId: string) => Promise<boolean>
+  unbindAgentFromScope: (agentId: string, businessScopeId: string) => Promise<boolean>
   clearError: () => void
 }
 
@@ -171,6 +173,36 @@ export function useAgents(options?: { pollInterval?: number }): UseAgentsReturn 
     setAgentsState({ error: null })
   }, [])
 
+  const bindAgentToScope = useCallback(async (agentId: string, businessScopeId: string): Promise<boolean> => {
+    try {
+      if (AgentService.bindAgentToScope) {
+        await AgentService.bindAgentToScope(agentId, businessScopeId)
+      }
+      return true
+    } catch (err) {
+      const message = err instanceof AgentServiceError ? err.message : 'Failed to bind agent to scope'
+      if (isMountedRef.current) {
+        setLocalError(message)
+      }
+      return false
+    }
+  }, [])
+
+  const unbindAgentFromScope = useCallback(async (agentId: string, businessScopeId: string): Promise<boolean> => {
+    try {
+      if (AgentService.unbindAgentFromScope) {
+        await AgentService.unbindAgentFromScope(agentId, businessScopeId)
+      }
+      return true
+    } catch (err) {
+      const message = err instanceof AgentServiceError ? err.message : 'Failed to unbind agent from scope'
+      if (isMountedRef.current) {
+        setLocalError(message)
+      }
+      return false
+    }
+  }, [])
+
   return {
     agents: state.agents,
     isLoading: state.isLoading,
@@ -180,6 +212,8 @@ export function useAgents(options?: { pollInterval?: number }): UseAgentsReturn 
     updateAgent,
     deleteAgent,
     getAgentsByDepartment,
+    bindAgentToScope,
+    unbindAgentFromScope,
     clearError,
   }
 }

@@ -165,6 +165,8 @@ export interface AgentConfig {
   name: string;
   displayName: string;
   systemPrompt: string | null;
+  /** Model identifier (e.g. LiteLLM model name). Passed to container to override ANTHROPIC_MODEL. */
+  model?: string;
   organizationId: string;
   skillIds: string[];
   mcpServerIds: string[];

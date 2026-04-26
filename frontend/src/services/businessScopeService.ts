@@ -27,6 +27,7 @@ export interface BusinessScope {
   avatar?: string | null;
   role?: string | null;
   systemPrompt?: string | null;
+  settings?: Record<string, unknown> | null;
 }
 
 export interface CreateBusinessScopeInput {

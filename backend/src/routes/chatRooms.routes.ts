@@ -68,6 +68,36 @@ export async function chatRoomRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
+   * POST /api/chat/rooms/cross-scope — Create a cross-scope group chat room
+   * Body: { title?: string, primary_scope_id?: string, members: [{ agent_id, scope_id }] }
+   */
+  fastify.post<{
+    Body: {
+      title?: string;
+      primary_scope_id?: string;
+      members: Array<{ agent_id: string; scope_id: string }>;
+    };
+  }>(
+    '/cross-scope',
+    { preHandler: [authenticate] },
+    async (request, reply) => {
+      const room = await chatRoomService.createCrossScopeRoom(
+        request.user!.orgId,
+        request.user!.id,
+        {
+          title: request.body.title,
+          primaryScopeId: request.body.primary_scope_id,
+          members: request.body.members.map(m => ({
+            agentId: m.agent_id,
+            scopeId: m.scope_id,
+          })),
+        },
+      );
+      return reply.status(201).send(room);
+    }
+  );
+
+  /**
    * GET /api/chat/rooms/:roomId — Get room details with members
    */
   fastify.get<{ Params: { roomId: string } }>(
@@ -113,9 +143,9 @@ export async function chatRoomRoutes(fastify: FastifyInstance): Promise<void> {
   );
 
   /**
-   * POST /api/chat/rooms/:roomId/members — Add agent to room
+   * POST /api/chat/rooms/:roomId/members — Add agent to room (supports cross-scope)
    */
-  fastify.post<{ Params: { roomId: string }; Body: { agent_id: string } }>(
+  fastify.post<{ Params: { roomId: string }; Body: { agent_id: string; source_scope_id?: string } }>(
     '/:roomId/members',
     { preHandler: [authenticate, requireModifyAccess] },
     async (request, reply) => {
@@ -124,6 +154,7 @@ export async function chatRoomRoutes(fastify: FastifyInstance): Promise<void> {
         request.params.roomId,
         request.body.agent_id,
         request.user!.id,
+        request.body.source_scope_id,
       );
       return reply.status(201).send({ ok: true });
     }
@@ -191,9 +222,16 @@ export async function chatRoomRoutes(fastify: FastifyInstance): Promise<void> {
       // Route the message to the appropriate agent
       const route = await chatRoomService.routeMessage(orgId, roomId, content, mention_agent_id);
 
-      // Get the session's business_scope_id
+      // Resolve the scope for the target agent.
+      // In cross-scope rooms, use the agent's source_scope_id from room membership.
+      // Falls back to the session's business_scope_id.
       const session = await chatSessionRepository.findById(roomId, orgId);
-      const scopeId = session?.business_scope_id;
+      const { chatRoomMemberRepository: memberRepo } = await import('../repositories/chat-room-member.repository.js');
+      const members = await memberRepo.findBySession(roomId);
+      const targetMember = members.find(m => m.agent_id === route.targetAgentId);
+      const scopeId = targetMember?.source_scope_id
+        ?? targetMember?.agent.business_scope_id
+        ?? session?.business_scope_id;
 
       if (!scopeId) {
         return reply.status(400).send({ route, error: 'Room has no business scope' });

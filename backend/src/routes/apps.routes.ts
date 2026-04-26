@@ -4,9 +4,11 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { stat as fsStat, cp, mkdir, readFile, rm } from 'fs/promises';
+import { stat as fsStat, cp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { createReadStream, existsSync } from 'fs';
 import { join, extname } from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { authenticate } from '../middleware/auth.js';
 import { config } from '../config/index.js';
 import { prisma } from '../config/database.js';
@@ -14,6 +16,8 @@ import { chatService } from '../services/chat.service.js';
 import { workspaceManager } from '../services/workspace-manager.js';
 import { streamRegistry } from '../services/stream-registry.js';
 import { findAppRoot } from '../services/app-finder.js';
+
+const execFileAsync = promisify(execFile);
 
 const APPS_STORAGE_DIR = join(config.claude.workspaceBaseDir, '_published_apps');
 
@@ -229,6 +233,22 @@ export async function appsRoutes(fastify: FastifyInstance): Promise<void> {
         });
       }
 
+      // NOTE: S3 sync before publish is intentionally skipped.
+      // The background sync-back in runConversation() already populates the
+      // local workspace cache after each agent invocation. Blocking here
+      // added seconds of latency for no benefit — the auto-build step below
+      // works on whatever files are already local, and for agentcore the
+      // container has already built dist/ and synced it to S3 → local.
+      // If files are still missing (rare race), the auto-build or entry-point
+      // check will surface a clear error.
+      // if (config.agentRuntime === 'agentcore') {
+      //   try {
+      //     await workspaceManager.ensureS3SyncedToLocal(orgId, scopeId, session_id);
+      //   } catch (err) {
+      //     request.log.warn({ err }, 'S3 sync failed before app publish');
+      //   }
+      // }
+
       // 2. Resolve the folder path within the workspace
       const workspacePath = workspaceManager.getSessionWorkspacePath(orgId, scopeId, session_id);
       let resolvedPath = workspaceManager.resolveWorkspaceFilePath(orgId, scopeId, session_id, folder_path);
@@ -260,7 +280,160 @@ export async function appsRoutes(fastify: FastifyInstance): Promise<void> {
         }
       }
 
-      // 4. Determine entry point — check common locations
+      // 4. Auto-build: if the folder has a package.json with a build script,
+      //    rebuild when:
+      //    a) No dist/ or build/ output exists yet, OR
+      //    b) Source files are newer than the existing build output.
+      //    This handles both first-time builds and re-builds after the agent
+      //    modifies source files (e.g. adding seed data) without rebuilding.
+      const pkgJsonPath = join(resolvedPath, 'package.json');
+      const hasDist = existsSync(join(resolvedPath, 'dist'));
+      const hasBuild = existsSync(join(resolvedPath, 'build'));
+
+      // Check if source files are newer than the build output
+      let sourceNewerThanBuild = false;
+      if (hasDist || hasBuild) {
+        try {
+          const buildDir = hasDist ? join(resolvedPath, 'dist') : join(resolvedPath, 'build');
+          const buildMtime = (await fsStat(buildDir)).mtimeMs;
+
+          // Check if any source file is newer than the build directory
+          const srcDir = join(resolvedPath, 'src');
+          if (existsSync(srcDir)) {
+            const checkNewer = async (dir: string): Promise<boolean> => {
+              const entries = await import('fs/promises').then(m => m.readdir(dir, { withFileTypes: true }));
+              for (const entry of entries) {
+                const fullPath = join(dir, entry.name);
+                if (entry.isDirectory()) {
+                  if (await checkNewer(fullPath)) return true;
+                } else {
+                  const fileMtime = (await fsStat(fullPath)).mtimeMs;
+                  if (fileMtime > buildMtime) return true;
+                }
+              }
+              return false;
+            };
+            sourceNewerThanBuild = await checkNewer(srcDir);
+          }
+
+          // Also check top-level config files (package.json, vite.config.*, index.html)
+          if (!sourceNewerThanBuild) {
+            for (const configFile of ['package.json', 'index.html', 'vite.config.ts', 'vite.config.js']) {
+              const cfgPath = join(resolvedPath, configFile);
+              if (existsSync(cfgPath)) {
+                const cfgMtime = (await fsStat(cfgPath)).mtimeMs;
+                if (cfgMtime > buildMtime) {
+                  sourceNewerThanBuild = true;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (sourceNewerThanBuild) {
+            request.log.info({ folder_path }, 'Source files are newer than build output — will rebuild');
+          }
+        } catch (err) {
+          request.log.warn({ err }, 'Failed to check source vs build timestamps, skipping rebuild check');
+        }
+      }
+
+      const needsBuild = !hasDist && !hasBuild;
+      if (existsSync(pkgJsonPath) && (needsBuild || sourceNewerThanBuild)) {
+        try {
+          const pkg = JSON.parse(await readFile(pkgJsonPath, 'utf-8'));
+          const hasBuildScript = pkg.scripts?.build;
+
+          if (hasBuildScript) {
+            request.log.info({ folder_path, reason: needsBuild ? 'no-build-output' : 'source-newer' },
+              needsBuild ? 'No dist/build found — auto-building app' : 'Source files changed — rebuilding app');
+
+            // Ensure Vite projects use relative base path for sub-path deployment.
+            // Published apps are served under /api/apps/<uuid>/static/, not root /.
+            const viteConfigCandidates = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs'];
+            let isViteProject = false;
+            for (const vc of viteConfigCandidates) {
+              const vcPath = join(resolvedPath, vc);
+              if (existsSync(vcPath)) {
+                isViteProject = true;
+                try {
+                  let vcContent = await readFile(vcPath, 'utf-8');
+                  if (!vcContent.includes("base:") && !vcContent.includes("base :")) {
+                    vcContent = vcContent.replace(
+                      /defineConfig\(\s*\{/,
+                      "defineConfig({\n  base: './',",
+                    );
+                    await writeFile(vcPath, vcContent, 'utf-8');
+                    request.log.info({ viteConfig: vc }, 'Injected base: "./" for sub-path deployment');
+                  }
+                } catch { /* non-critical */ }
+                break;
+              }
+            }
+
+            // Install dependencies and build.
+            // The workspace may have a partial node_modules (runtime deps synced
+            // from S3) but missing devDependencies (vite, etc.) and possibly
+            // missing third-party deps the agent added. Run a full npm install
+            // to ensure everything is present.
+            //
+            // IMPORTANT: Override NODE_ENV to ensure devDependencies (vite,
+            // typescript, etc.) are installed — the backend runs with
+            // NODE_ENV=production which causes npm to skip devDependencies.
+            const buildEnv = { ...process.env, NODE_ENV: 'development' };
+
+            request.log.info({ folder_path }, 'Running npm install');
+            try {
+              const { stderr: installStderr } = await execFileAsync('npm', ['install'], {
+                cwd: resolvedPath,
+                timeout: 120_000,
+                env: buildEnv,
+              });
+              if (installStderr) {
+                request.log.warn({ folder_path, stderr: installStderr.slice(0, 500) }, 'npm install stderr');
+              }
+            } catch (installErr: any) {
+              throw new Error(`npm install failed: ${installErr?.message || 'Unknown error'}`);
+            }
+
+            request.log.info({ folder_path }, 'npm install completed, running build');
+
+            if (isViteProject) {
+              const viteBin = join(resolvedPath, 'node_modules', '.bin', 'vite');
+              if (existsSync(viteBin)) {
+                await execFileAsync(viteBin, ['build'], {
+                  cwd: resolvedPath,
+                  timeout: 60_000,
+                  env: buildEnv,
+                });
+              } else {
+                request.log.warn({ folder_path, viteBin }, 'vite binary not found after npm install, falling back to npx');
+                await execFileAsync('npx', ['vite', 'build'], {
+                  cwd: resolvedPath,
+                  timeout: 60_000,
+                  env: buildEnv,
+                });
+              }
+            } else {
+              await execFileAsync('npm', ['run', 'build'], {
+                cwd: resolvedPath,
+                timeout: 60_000,
+                env: buildEnv,
+              });
+            }
+
+            request.log.info({ folder_path }, 'Auto-build completed');
+          }
+        } catch (buildErr: any) {
+          request.log.error({ err: buildErr?.message, folder_path }, 'Auto-build failed');
+          return reply.status(500).send({
+            error: `App build failed: ${buildErr?.message || 'Unknown error'}. Ensure the app has a valid build script.`,
+            code: 'BUILD_FAILED',
+          });
+        }
+      }
+
+      // 5. Determine entry point — check common locations
       //    Prefer dist/ and build/ over root index.html because root index.html
       //    in framework projects (Vite, CRA) is the dev template, not the built output.
       let resolvedEntry = entry_point || 'index.html';
@@ -310,7 +483,7 @@ export async function appsRoutes(fastify: FastifyInstance): Promise<void> {
         resolvedEntry = 'index.html'; // entry is now at root of the copied folder
       }
 
-      // 5. Check if this app was already published from the same session + folder
+      // 6. Check if this app was already published from the same session + folder
       const existingApp = await prisma.published_apps.findFirst({
         where: {
           org_id: orgId,
@@ -382,7 +555,7 @@ export async function appsRoutes(fastify: FastifyInstance): Promise<void> {
 
       // ── NEW publish ──
 
-      // 6. Copy bundle to published apps storage
+      // 7. Copy bundle to published apps storage
       await mkdir(APPS_STORAGE_DIR, { recursive: true });
       const appId = crypto.randomUUID();
       const targetDir = join(APPS_STORAGE_DIR, appId);
@@ -396,7 +569,7 @@ export async function appsRoutes(fastify: FastifyInstance): Promise<void> {
         });
       }
 
-      // 6. Create DB record
+      // 8. Create DB record
       const app = await prisma.published_apps.create({
         data: {
           id: appId,

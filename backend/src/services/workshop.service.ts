@@ -216,6 +216,24 @@ export class WorkshopService {
   }
 
   /**
+   * Reset the workshop session to an empty state (no equipped skills).
+   * Used by single-skill test mode to start clean.
+   */
+  async resetSession(organizationId: string, agentId: string): Promise<void> {
+    const agent = await agentRepository.findById(agentId, organizationId);
+    if (!agent) throw AppError.notFound(`Agent ${agentId} not found`);
+
+    const key = this.sessionKey(organizationId, agentId);
+    const session: WorkshopSession = {
+      agentId,
+      organizationId,
+      equippedSkillIds: new Set(),
+      lastActivity: Date.now(),
+    };
+    this.sessions.set(key, session);
+  }
+
+  /**
    * Get all installed skills for the organization (for the "equip from installed" list).
    */
   async getInstalledSkills(organizationId: string): Promise<EquippedSkillInfo[]> {

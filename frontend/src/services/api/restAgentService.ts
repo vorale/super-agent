@@ -120,8 +120,8 @@ function parseModelConfig(config: unknown): ModelConfig {
   return { provider: 'Bedrock', modelId: 'claude-3-sonnet', agentType: 'Worker' };
 }
 
-function isValidProvider(value: unknown): value is 'Bedrock' | 'OpenAI' | 'Azure' {
-  return value === 'Bedrock' || value === 'OpenAI' || value === 'Azure';
+function isValidProvider(value: unknown): value is 'Bedrock' | 'OpenAI' | 'Azure' | 'LiteLLM' {
+  return value === 'Bedrock' || value === 'OpenAI' || value === 'Azure' || value === 'LiteLLM';
 }
 
 function isValidAgentType(value: unknown): value is 'Orchestrator' | 'Worker' | 'Supervisor' {
@@ -267,6 +267,49 @@ export const RestAgentService = {
     } catch (error) {
       if (error instanceof ServiceError) throw error;
       throw new ServiceError(`Failed to fetch agents with status "${status}"`, 'UNKNOWN');
+    }
+  },
+
+  /**
+   * Binds an agent to a business scope (M:N relationship).
+   * This adds the agent to the scope without removing it from other scopes.
+   */
+  async bindAgentToScope(agentId: string, businessScopeId: string): Promise<void> {
+    try {
+      await restClient.post(`/api/agents/${agentId}/scopes`, {
+        business_scope_id: businessScopeId,
+      });
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError(`Failed to bind agent "${agentId}" to scope "${businessScopeId}"`, 'UNKNOWN');
+    }
+  },
+
+  /**
+   * Unbinds an agent from a business scope (M:N relationship).
+   * This removes the agent from the scope without affecting other scope memberships.
+   */
+  async unbindAgentFromScope(agentId: string, businessScopeId: string): Promise<void> {
+    try {
+      await restClient.delete(`/api/agents/${agentId}/scopes/${businessScopeId}`);
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError(`Failed to unbind agent "${agentId}" from scope "${businessScopeId}"`, 'UNKNOWN');
+    }
+  },
+
+  /**
+   * Gets all scope assignments for an agent.
+   */
+  async getAgentScopes(agentId: string): Promise<Array<{ id: string; agent_id: string; business_scope_id: string; is_primary: boolean; assigned_at: string }>> {
+    try {
+      const response = await restClient.get<{ scopes: Array<{ id: string; agent_id: string; business_scope_id: string; is_primary: boolean; assigned_at: string }> }>(
+        `/api/agents/${agentId}/scopes`
+      );
+      return response.scopes;
+    } catch (error) {
+      if (error instanceof ServiceError) throw error;
+      throw new ServiceError(`Failed to get scopes for agent "${agentId}"`, 'UNKNOWN');
     }
   },
 

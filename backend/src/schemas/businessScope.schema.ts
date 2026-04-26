@@ -24,6 +24,7 @@ export const createBusinessScopeSchema = z.object({
   avatar: z.string().max(1024).optional().nullable(),
   role: z.string().max(255).optional().nullable(),
   system_prompt: z.string().optional().nullable(),
+  settings: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
 /**
@@ -40,6 +41,7 @@ export const updateBusinessScopeSchema = z.object({
   avatar: z.string().max(1024).optional().nullable(),
   role: z.string().max(255).optional().nullable(),
   system_prompt: z.string().optional().nullable(),
+  settings: z.record(z.string(), z.unknown()).optional().nullable(),
 });
 
 /**

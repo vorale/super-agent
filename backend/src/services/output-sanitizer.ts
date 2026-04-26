@@ -5,7 +5,7 @@
  * they reach the client. Runs as the last step before SSE serialization.
  *
  * Targets:
- *   - Absolute workspace paths
+ *   - Absolute workspace paths (e.g. /Users/fredzh/Downloads/.../workspaces/...)
  *   - Home directory paths
  *   - Internal env vars (API_BASE_URL, AUTH_TOKEN)
  *   - AWS credentials if accidentally echoed

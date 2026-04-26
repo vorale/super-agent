@@ -167,6 +167,48 @@ export class AgentCoreCommandService {
     return exitCode === 0;
   }
 
+  /**
+   * Pull a file from S3 into the running container's /workspace.
+   * Uses the AWS CLI inside the container to download the file directly,
+   * avoiding base64/heredoc size limits.
+   */
+  async syncFileFromS3(
+    sessionId: string,
+    bucket: string,
+    s3Key: string,
+    workspaceRelativePath: string,
+  ): Promise<boolean> {
+    const safe = this.sanitizePath(workspaceRelativePath);
+    if (!safe) return false;
+
+    // Use a node script to download from S3 — the container has node +
+    // @aws-sdk/client-s3 installed. The container uses ESM ("type":"module")
+    // so we use dynamic import() and --input-type=module.
+    // The container's WORKSPACE_S3_REGION env var is used for the S3 client
+    // region (may differ from the Bedrock region in AWS_REGION).
+    const script = [
+      `mkdir -p /workspace/$(dirname '${safe}')`,
+      `&&`,
+      `node --input-type=module -e "`,
+      `import{S3Client,GetObjectCommand}from'@aws-sdk/client-s3';`,
+      `import{createWriteStream}from'fs';`,
+      `import{pipeline}from'stream/promises';`,
+      `const s3=new S3Client({region:process.env.WORKSPACE_S3_REGION||'us-east-1'});`,
+      `const r=await s3.send(new GetObjectCommand({Bucket:'${bucket}',Key:'${s3Key}'}));`,
+      `await pipeline(r.Body,createWriteStream('/workspace/${safe}'));`,
+      `console.log('OK');`,
+      `"`,
+    ].join(' ');
+
+    const { exitCode, stderr } = await this.runCommand(sessionId, script, 120);
+
+    if (exitCode !== 0) {
+      console.warn(`[agentcore-cmd] syncFileFromS3 failed for ${safe}:`, stderr);
+    }
+
+    return exitCode === 0;
+  }
+
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------

@@ -254,6 +254,7 @@ export class BusinessScopeService {
     if (data.avatar !== undefined) updateData.avatar = data.avatar;
     if (data.role !== undefined) updateData.role = data.role;
     if (data.system_prompt !== undefined) updateData.system_prompt = data.system_prompt;
+    if (data.settings !== undefined) updateData.settings = data.settings;
 
     try {
       const updatedScope = await businessScopeRepository.update(id, organizationId, updateData);
@@ -416,18 +417,18 @@ export class BusinessScopeService {
     // Get all agents in the scope
     const agents = await agentRepository.findByBusinessScope(organizationId, businessScopeId);
 
-    // Get skills for each agent
+    // Get skills for each agent, preferring scope-owned forks
     const agentsWithSkills: AgentWithSkills[] = [];
     
     for (const agent of agents) {
-      const skills = await skillRepository.findByAgentId(organizationId, agent.id);
+      const skills = await skillRepository.findByAgentIdWithScopeForks(organizationId, agent.id, businessScopeId);
       
       agentsWithSkills.push({
         ...agent,
         skill_ids: skills.map(s => s.id),
         skills: skills.map(s => ({
           id: s.id,
-          name: s.name,
+          name: s.parent_skill_id ? s.name.replace(/@scope-[a-f0-9]+$/, '') : s.name,
           description: s.description,
           hash_id: s.hash_id,
           s3_bucket: s.s3_bucket,

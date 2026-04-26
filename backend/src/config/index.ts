@@ -53,6 +53,7 @@ const envSchema = z.object({
   // S3
   S3_BUCKET_NAME: z.string().default('super-agent-files'),
   S3_PRESIGNED_URL_EXPIRES: z.string().default('3600').transform(Number),
+  SKILLS_S3_BUCKET: z.string().default('super-agent-skills'),
 
   // Logging
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
@@ -91,6 +92,10 @@ const envSchema = z.object({
   AGENTCORE_BACKEND_API_URL: z.string().optional(),
   AGENTCORE_BACKEND_API_KEY: z.string().optional(),
   AGENTCORE_WORKSPACE_S3_BUCKET: z.string().optional().default('super-agent-workspaces'),
+
+  // LiteLLM Proxy (for model listing and routing)
+  LITELLM_BASE_URL: z.string().optional(),
+  LITELLM_API_KEY: z.string().optional(),
 
   // Agent Runtime selection: "claude" (default), "agentcore", or "openclaw"
   AGENT_RUNTIME: z.enum(['claude', 'agentcore', 'openclaw']).optional().default('claude'),
@@ -191,6 +196,7 @@ export const config = {
   s3: {
     bucketName: env.S3_BUCKET_NAME,
     presignedUrlExpires: env.S3_PRESIGNED_URL_EXPIRES,
+    skillsBucket: env.SKILLS_S3_BUCKET,
   },
 
   claude: {
@@ -225,6 +231,11 @@ export const config = {
     backendApiKey: env.AGENTCORE_BACKEND_API_KEY,
     workspaceS3Bucket: env.AGENTCORE_WORKSPACE_S3_BUCKET,
     region: env.AWS_REGION,
+  },
+
+  litellm: {
+    baseUrl: env.LITELLM_BASE_URL,
+    apiKey: env.LITELLM_API_KEY,
   },
 
   agentRuntime: env.AGENT_RUNTIME,

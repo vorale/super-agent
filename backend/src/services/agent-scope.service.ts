@@ -48,7 +48,11 @@ export class AgentScopeService {
     return agentScopeAssignmentRepository.findByAgent(agentId);
   }
 
-  async getScopeAgentAssignments(businessScopeId: string): Promise<AgentScopeAssignmentEntity[]> {
+  async getScopeAgentAssignments(organizationId: string, businessScopeId: string): Promise<AgentScopeAssignmentEntity[]> {
+    // Validate scope belongs to org
+    const scope = await businessScopeRepository.findById(businessScopeId, organizationId);
+    if (!scope) throw AppError.notFound(`Business scope with ID ${businessScopeId} not found`);
+
     return agentScopeAssignmentRepository.findByScope(businessScopeId);
   }
 }

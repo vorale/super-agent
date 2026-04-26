@@ -169,6 +169,7 @@ export class DiscordAdapter implements IMAdapter {
         userName: message.author.username,
         text: content,
         bindingId: binding.id,
+        isExplicitThread: !!message.reference?.messageId,
       };
 
       // Enqueue for async processing

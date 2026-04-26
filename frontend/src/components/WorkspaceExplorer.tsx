@@ -18,6 +18,8 @@ interface WorkspaceExplorerProps {
   sessionId: string | null
   businessScopeId?: string | null
   refreshKey?: number
+  /** Whether the agent is currently generating a response (enables fast polling). */
+  isGenerating?: boolean
   onFileOpen?: (path: string, name: string) => void
   width: number
   onWidthChange: (width: number) => void
@@ -178,7 +180,7 @@ function DragHandle({ onDrag }: { onDrag: (deltaX: number) => void }) {
 }
 
 export function WorkspaceExplorer({
-  sessionId, businessScopeId, refreshKey, onFileOpen, width, onWidthChange, minWidth = 200, maxWidth = 600,
+  sessionId, businessScopeId, refreshKey, isGenerating = false, onFileOpen, width, onWidthChange, minWidth = 200, maxWidth = 600,
 }: WorkspaceExplorerProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [files, setFiles] = useState<FileNode[]>([])
@@ -239,16 +241,18 @@ export function WorkspaceExplorer({
 
   useEffect(() => { void loadFiles() }, [loadFiles])
 
-  // Poll for workspace changes every 5 seconds while a session is active.
+  // Poll for workspace changes while a session is active.
+  // Fast (5s) during generation, slow (30s) when idle.
   // Stop polling after 5 consecutive errors to avoid hammering a dead backend.
   useEffect(() => {
     if (!sessionId) return
+    const interval = isGenerating ? 5000 : 30000
     const id = setInterval(() => {
       if (pollErrorCount.current >= 5) return // back off on persistent errors
       void loadFiles(true)
-    }, 5000)
+    }, interval)
     return () => clearInterval(id)
-  }, [sessionId, loadFiles])
+  }, [sessionId, loadFiles, isGenerating])
 
   useEffect(() => {
     if (refreshKey && refreshKey > 0) void loadFiles()
