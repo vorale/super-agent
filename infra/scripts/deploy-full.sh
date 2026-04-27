@@ -214,8 +214,11 @@ if [ "$SKIP_AGENTCORE" = false ]; then
   echo "  ECR: $ECR_URI"
 
   # --- 3b: IAM Execution Role ---
+  # Role and policy names are scoped by stack name to avoid conflicts
+  # when multiple stacks share the same AWS account.
   echo "  [3b] Ensuring IAM execution role..."
-  ROLE_NAME="super-agent-agentcore-execution-role"
+  ROLE_NAME="super-agent-agentcore-role-${STACK_NAME}"
+  POLICY_NAME="agentcore-permissions-${STACK_NAME}"
 
   if ! aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null; then
     echo "  Creating role $ROLE_NAME..."
@@ -229,11 +232,11 @@ if [ "$SKIP_AGENTCORE" = false ]; then
           "Action": "sts:AssumeRole"
         }]
       }' \
-      --description "Execution role for Super Agent AgentCore containers"
+      --description "Execution role for Super Agent AgentCore containers ($STACK_NAME)"
   fi
 
   # Always update permissions to latest
-  echo "  Updating permissions policy..."
+  echo "  Updating permissions policy ($POLICY_NAME)..."
   # Read the actual workspace bucket name from stack outputs (matches CDK: super-agent-workspace-<account>)
   WORKSPACE_BUCKET_NAME=$(aws cloudformation describe-stacks \
     --stack-name "$STACK_NAME" --region "$REGION" \
@@ -243,7 +246,7 @@ if [ "$SKIP_AGENTCORE" = false ]; then
     --query "Stacks[0].Outputs[?OutputKey=='SkillsBucketName'].OutputValue" --output text 2>/dev/null || echo "")
   aws iam put-role-policy \
     --role-name "$ROLE_NAME" \
-    --policy-name agentcore-permissions \
+    --policy-name "$POLICY_NAME" \
     --policy-document "{
       \"Version\": \"2012-10-17\",
       \"Statement\": [
