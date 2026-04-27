@@ -409,6 +409,26 @@ async function updateNodeStatus(
 
 async function completeExecution(executionId: string, success: boolean, error?: string, logs?: unknown[]): Promise<void> {
   try {
+    // When workflow succeeds, finalize any nodes still stuck in 'executing' status.
+    // This can happen when the agent completes a step's work but fails to emit
+    // the STEP_COMPLETE marker or call the workflow_step_complete MCP tool.
+    if (success) {
+      try {
+        await prisma.node_executions.updateMany({
+          where: {
+            execution_id: executionId,
+            status: 'executing',
+          },
+          data: {
+            status: 'finish',
+            completed_at: new Date(),
+          },
+        });
+      } catch (nodeErr) {
+        console.warn(`[workflow-v2] Failed to finalize executing nodes for ${executionId}:`, nodeErr);
+      }
+    }
+
     await prisma.workflow_executions.update({
       where: { id: executionId },
       data: {
@@ -751,6 +771,12 @@ export class WorkflowExecutorV2 {
           organizationId,
           userId,
           workspacePath,
+          // Pass workspace session/scope so AgentCore uses the correct S3 prefix
+          // (orgId/scopeId/sessionId/) matching what we store in the DB.
+          // Without these, AgentCore defaults to 'default/ephemeral/' and files
+          // written by the container become invisible to the workspace file API.
+          sessionId: workspaceSessionId,
+          scopeId: workspaceScopeId,
         },
         agentConfig,
         skills,

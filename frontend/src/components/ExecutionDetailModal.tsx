@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   X, CheckCircle2, XCircle, Clock, Loader2, AlertTriangle,
   ChevronDown, ChevronRight, FileText, FolderOpen, ScrollText,
-  LayoutList, File, Folder,
+  LayoutList, File, Folder, Download,
 } from 'lucide-react';
 import { getAuthToken } from '@/services/api/restClient';
 import { useTranslation } from '@/i18n';
@@ -455,7 +455,26 @@ function WorkspaceTab({ executionId }: { executionId: string }) {
           <>
             <div className="px-3 py-2 border-b border-gray-700/50 flex items-center gap-2">
               <File className="w-3.5 h-3.5 text-gray-400" />
-              <span className="text-xs text-gray-300 truncate">{selectedFile}</span>
+              <span className="text-xs text-gray-300 truncate flex-1">{selectedFile}</span>
+              {fileContent && !fileLoading && (
+                <button
+                  onClick={() => {
+                    const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = selectedFile.split('/').pop() || 'download';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="p-1 rounded hover:bg-gray-700/50 text-gray-400 hover:text-gray-200 transition-colors"
+                  title="Download file"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
             <div className="flex-1 overflow-auto p-3">
               {fileLoading ? (

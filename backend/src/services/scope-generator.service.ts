@@ -6,9 +6,8 @@
  *
  * The active runtime is determined by the AGENT_RUNTIME env var via the
  * shared agent-runtime-factory. When running under AgentCore the workspace
- * is automatically synced to/from S3 by the AgentCore runtime, so the
- * file-based flow (write scope-config.json → read it back) works in both
- * modes without special handling here.
+ * files live in S3 — the service waits for sync-back or reads directly
+ * from S3 before checking for scope-config.json.
  */
 
 import { agentRuntime } from './agent-runtime-factory.js';
@@ -17,6 +16,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { existsSync } from 'fs';
+import { config } from '../config/index.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -100,7 +100,13 @@ Skill guidelines:
 - Prefer examples and step-by-step procedures over general descriptions
 - Skills should encode domain knowledge the agent wouldn't inherently have
 
-Remember: Write the final JSON to "scope-config.json" in the current directory. This is mandatory.`;
+Remember: Write the final JSON to "scope-config.json" in the current directory. This is mandatory.
+
+CRITICAL BEHAVIORAL RULES:
+- NEVER ask clarifying questions. NEVER ask the user for more information. Work with whatever input is provided, no matter how brief or vague.
+- If the business description is short or ambiguous, make reasonable assumptions and generate a complete configuration immediately.
+- Your ONLY job is to analyze the input and produce the JSON file. Do not engage in conversation.
+- Start working immediately upon receiving the user message. Do not output preamble or ask for confirmation.`;
 
 // ---------------------------------------------------------------------------
 // Language instruction helpers
@@ -196,6 +202,70 @@ function validateScopeConfigJson(raw: string): { ok: true; config: GeneratedScop
 }
 
 // ---------------------------------------------------------------------------
+// AgentCore S3 file reading helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Wait for a local file to appear (sync-back from S3 may be in progress).
+ * Returns true if the file appeared within the timeout, false otherwise.
+ */
+async function waitForLocalFile(filePath: string, timeoutMs: number = 10_000, intervalMs: number = 500): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (existsSync(filePath)) return true;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return existsSync(filePath);
+}
+
+/**
+ * Read scope-config.json content, with S3 fallback for AgentCore mode.
+ *
+ * In AgentCore mode the container writes files to S3. The sync-back to local
+ * is fire-and-forget, so the file may not be on disk yet when we check.
+ * This function:
+ *   1. Waits briefly for the local file to appear (sync-back in progress)
+ *   2. If still missing and running AgentCore, reads directly from S3
+ */
+async function readConfigFile(
+  localPath: string,
+  s3Prefix: string | undefined,
+): Promise<string | null> {
+  // Fast path: file already on disk
+  if (existsSync(localPath)) {
+    return readFile(localPath, 'utf-8');
+  }
+
+  // In AgentCore mode, wait a bit for sync-back then try S3 directly
+  if (config.agentRuntime === 'agentcore' && s3Prefix) {
+    // Give sync-back a chance to complete
+    const appeared = await waitForLocalFile(localPath, 8_000);
+    if (appeared) {
+      return readFile(localPath, 'utf-8');
+    }
+
+    // Read directly from S3
+    try {
+      const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
+      const s3Client = new S3Client({ region: config.agentcore.region });
+      const s3Key = `${s3Prefix}scope-config.json`;
+      console.log(`[scope-generator] Reading scope-config.json from S3: s3://${config.agentcore.workspaceS3Bucket}/${s3Key}`);
+      const response = await s3Client.send(new GetObjectCommand({
+        Bucket: config.agentcore.workspaceS3Bucket,
+        Key: s3Key,
+      }));
+      if (response.Body) {
+        return await response.Body.transformToString('utf-8');
+      }
+    } catch (err) {
+      console.warn('[scope-generator] Failed to read scope-config.json from S3:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -254,6 +324,11 @@ export class ScopeGeneratorService {
       // Use a stable session ID so repair turns share the same conversation context
       const sessionId = `scope-gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+      // Compute S3 prefix for AgentCore mode (must match what AgentCoreAgentRuntime builds)
+      const s3Prefix = config.agentRuntime === 'agentcore'
+        ? `system/system/${sessionId}/`
+        : undefined;
+
       try {
         // ---- Initial generation ----
         yield* agentRuntime.runConversation(
@@ -274,7 +349,10 @@ export class ScopeGeneratorService {
         let validConfig: GeneratedScopeConfig | null = null;
 
         for (let attempt = 0; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
-          if (!existsSync(configFilePath)) {
+          // Read config file (local-first, S3 fallback for AgentCore)
+          const fileContent = await readConfigFile(configFilePath, s3Prefix);
+
+          if (fileContent === null) {
             if (attempt === MAX_REPAIR_ATTEMPTS) {
               console.error('[scope-generator] scope-config.json still not found after repair attempts');
               break;
@@ -290,7 +368,6 @@ export class ScopeGeneratorService {
             continue;
           }
 
-          const fileContent = await readFile(configFilePath, 'utf-8');
           const result = validateScopeConfigJson(fileContent);
 
           if (result.ok) {
