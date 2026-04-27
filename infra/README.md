@@ -1,320 +1,213 @@
-# Super Agent infra — 端到端部署指南
+# Super Agent Infra — 部署指南
 
-本文档覆盖从零开始到系统可用的完整流程，包括核心基础设施、可选 CloudFront CDN、可选 AgentCore Runtime。
+## 概述
+
+本项目提供两种部署方式：
+
+- **一键部署**（推荐）：`deploy-full.sh` 自动完成 CDK 基础设施 + 代码部署 + AgentCore 容器，约 20-30 分钟
+- **分步部署**：手动执行 CDK、`deploy.sh`、AgentCore 各阶段
+
+### 架构
+
+```
+用户 → CloudFront → S3 (前端静态文件)
+                  → EC2 Nginx (API /api/*, WebSocket /ws/*)
+                       → Node.js 后端 (port 3000)
+                       → RDS PostgreSQL
+                       → ElastiCache Redis
+                       → Bedrock AgentCore Runtime (容器化 Agent)
+```
 
 ## 前置条件
 
-- AWS CLI v2 + SSM Session Manager 插件
-- Node.js 22+
-- Docker（如需 AgentCore）
-- 一个 AWS 账号，已配置好 `aws configure`
-- 一个 EC2 Key Pair（在目标 region 创建好）
+| 工具 | 用途 |
+|------|------|
+| AWS CLI v2 | 基础设施操作 |
+| SSM Session Manager 插件 | SSH 隧道（不需要公网 SSH） |
+| Node.js 22+ | 前后端构建 |
+| Docker (buildx, ARM64) | AgentCore 容器构建，Apple Silicon 原生支持 |
+| EC2 Key Pair | 在目标 region 创建，本地有 `.pem` 私钥 |
 
-## 第一部分：核心基础设施部署
-
-### 步骤 1：CDK 部署
+确认 AWS 身份：
 
 ```bash
-cd infra
-npm install
-
-# 最简部署（local auth，无 CDN）
-npx cdk deploy -c stackName=SuperAgentTest \
-  --parameters KeyPairName=<your-key-pair-name> \
-  --region us-west-2
-
-# 如需 Cognito 认证
-npx cdk deploy -c stackName=SuperAgentTest -c authMode=cognito \
-  --parameters KeyPairName=<your-key-pair-name> \
-  --parameters CognitoDomainPrefix=<globally-unique-prefix> \
-  --parameters AdminEmail=admin@example.com \
-  --region us-west-2
-
-# 如需 CloudFront CDN + 自定义域名
-npx cdk deploy -c stackName=SuperAgentTest \
-  -c enableCdn=true \
-  -c domainName=app.example.com \
-  -c hostedZoneId=Z0123456789ABCDEF \
-  --parameters KeyPairName=<your-key-pair-name> \
-  --region us-west-2
+aws sts get-caller-identity
+aws ec2 describe-key-pairs --query "KeyPairs[].KeyName" --region us-west-2
 ```
 
-CDK 完成后会输出 InstanceId、PublicIP、DBSecretArn 等值。不需要手动记录，deploy.sh 会自动读取。
+## 一键部署（推荐）
 
-### 步骤 2：等待 EC2 初始化
+### 带自定义域名（CloudFront CDN）
 
-CDK 创建的 EC2 实例需要 3-5 分钟完成 user-data 脚本（安装 Node.js、Redis、Nginx 等）。
-
-验证 SSM 是否就绪：
+需要 Route53 托管的域名。查找 hosted zone ID：
 
 ```bash
-aws ssm describe-instance-information \
-  --filters "Key=InstanceIds,Values=<InstanceId>" \
+aws route53 list-hosted-zones --query "HostedZones[].{Name:Name,Id:Id}" --output table
+```
+
+执行部署：
+
+```bash
+cd /path/to/super-agent
+
+./infra/scripts/deploy-full.sh ~/Downloads/my-key.pem \
+  --stack SuperAgentProd \
   --region us-west-2 \
-  --query "InstanceInformationList[0].PingStatus"
+  --domain app.example.com \
+  --hosted-zone-id Z01234567890ABC
 ```
 
-等到输出 `"Online"` 再继续。
-
-### 步骤 3：运行部署脚本
+### 可选参数
 
 ```bash
-cd infra
-
-# 基础部署
-./scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentTest
-
-# 带 Cognito 密码（首次部署需要）
-./scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentTest \
-  --cognito-password 'YourSecurePass1'
-
-# 只部署前端（后端没改）
-./scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentTest --skip-backend
-
-# 只部署后端（前端没改）
-./scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentTest --skip-frontend
-
-# 带额外 .env 覆盖
-./scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentTest \
-  --env-file ./my-overrides.env
+--stack <name>          # Stack 名称（默认 SuperAgent），不同 stack 完全隔离
+--region <region>       # AWS Region（默认 us-west-2）
+--bedrock-ak <key>      # 跨账号 Bedrock 凭证（可选）
+--bedrock-sk <secret>   # 跨账号 Bedrock 凭证（可选）
+--skip-cdk              # 跳过基础设施（已有 stack 时用）
+--skip-agentcore        # 跳过 AgentCore 容器部署
+--skip-frontend         # 跳过前端构建
+--skip-backend          # 跳过后端构建
 ```
 
-deploy.sh 会自动完成：
-1. 从 CloudFormation 读取所有资源 ID
-2. 开 SSM 隧道
-3. 生成 .env（从 Secrets Manager 拉 DATABASE_URL，合并 stack outputs）
-4. 如果 EC2 上已有 .env，保留用户手动添加的变量（BEDROCK_*、AGENTCORE_* 等）
-5. 构建前端 → rsync 到 EC2（如有 CloudFront 还会 S3 sync + invalidation）
-6. rsync 后端 → npm ci → prisma generate → tsc → prisma migrate deploy → seed → restart
+### 部署流程（3 个阶段）
 
-### 步骤 4：验证
+**Phase 1: CDK Deploy**
+- 创建 VPC Security Groups、EC2 (t4g.small ARM64)、EIP
+- RDS PostgreSQL 16.6、ElastiCache Redis 7.1
+- S3 桶（Avatar、Skills、Workspace、Frontend）
+- CloudFront + ACM 证书 + Route53 ALIAS
+- IAM Role（EC2 + AgentCore）
+- 等待 EC2 UserData 完成（安装 Node.js、Nginx、PostgreSQL client 等）
 
-浏览器访问 deploy.sh 最后输出的 App URL。
+**Phase 2: Code Deploy**（调用 `deploy.sh`）
+- 从 SecretsManager 获取 RDS 凭证，生成 `.env`
+- 构建前端（Vite）→ rsync 到 EC2 + S3 sync + CloudFront 失效
+- 编译后端（tsc）→ rsync 到 EC2 → npm ci → prisma migrate → seed → 重启
+- 首次部署自动创建 admin 用户：`admin@example.com` / `Admin1234!`
 
----
+**Phase 3: AgentCore Setup**
+- 创建 ECR 仓库，构建推送 ARM64 Docker 镜像
+- 创建 IAM Execution Role（Bedrock、S3、ECR、Browser、Code Interpreter 权限）
+- 创建 Bedrock AgentCore Runtime
+- 更新 EC2 `.env` 启用 AgentCore 模式
 
-## 第二部分：AgentCore Runtime 部署（可选）
+### 部署完成后
 
-如果需要让 Agent 在隔离容器中运行（而非 EC2 子进程），按以下步骤操作。
-这部分只需要执行一次，后续代码部署不需要重复。
+访问 `https://app.example.com`，使用 `admin@example.com` / `Admin1234!` 登录。
 
-### 步骤 A：创建 ECR 仓库
+> **重要**：首次登录后请立即修改 admin 密码。
+
+## 增量部署
+
+全量部署完成后，日常代码更新不需要重建基础设施：
 
 ```bash
-aws ecr create-repository \
-  --repository-name super-agent-agentcore \
-  --region us-west-2
+# 只部署代码（跳过 CDK 和 AgentCore）
+./infra/scripts/deploy-full.sh ~/Downloads/my-key.pem \
+  --stack SuperAgentProd --skip-cdk --skip-agentcore
+
+# 或直接用 deploy.sh
+./infra/scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentProd
+
+# 只更新前端
+./infra/scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentProd --skip-backend
+
+# 只更新后端
+./infra/scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentProd --skip-frontend
 ```
 
-### 步骤 B：构建并推送 Docker 镜像
+## 多环境隔离
+
+每个 `--stack` 名称创建完全独立的资源（EC2、RDS、Redis、S3、CloudFront）：
 
 ```bash
-# ECR 登录
-aws ecr get-login-password --region us-west-2 | \
-  docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com
+# 生产环境
+./infra/scripts/deploy-full.sh ~/key.pem --stack SuperAgentProd --domain app.example.com --hosted-zone-id Z0XXX
 
-# 构建 ARM64 镜像（AgentCore 要求 ARM64）
-cd agentcore
-docker buildx build --platform linux/arm64 \
-  -t super-agent-agentcore:latest \
-  -t <ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/super-agent-agentcore:latest \
-  --load .
-
-# 推送
-docker push <ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/super-agent-agentcore:latest
+# 测试环境
+./infra/scripts/deploy-full.sh ~/key.pem --stack SuperAgentTest --domain test.example.com --hosted-zone-id Z0XXX
 ```
 
-> 注意：必须是 `linux/arm64`，不是 amd64。在 Apple Silicon Mac 上原生构建，秒级完成。
+S3 桶名、SecretsManager secret 名、ElastiCache 集群名都以 stack 名为前缀，不会冲突。
 
-### 步骤 C：创建 IAM Execution Role
+## CI/CD（GitHub Actions）
+
+项目包含 `.github/workflows/deploy-test.yml`，push 到 main 自动部署测试环境。
+
+### 配置 GitHub Secrets
 
 ```bash
-# Trust policy
-cat << 'EOF' > /tmp/agentcore-trust-policy.json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": { "Service": "bedrock-agentcore.amazonaws.com" },
-    "Action": "sts:AssumeRole"
-  }]
-}
-EOF
-
-aws iam create-role \
-  --role-name super-agent-agentcore-execution-role \
-  --assume-role-policy-document file:///tmp/agentcore-trust-policy.json
-
-# Permissions policy
-cat << 'EOF' > /tmp/agentcore-permissions.json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "BedrockInvoke",
-      "Effect": "Allow",
-      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "ECRPull",
-      "Effect": "Allow",
-      "Action": ["ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "ecr:GetAuthorizationToken"],
-      "Resource": "*"
-    },
-    {
-      "Sid": "WorkspaceS3",
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:ListBucket",
-        "s3:DeleteObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::super-agent-workspaces-<ACCOUNT_ID>",
-        "arn:aws:s3:::super-agent-workspaces-<ACCOUNT_ID>/*"
-      ]
-    },
-    {
-      "Sid": "BrowserTool",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:CreateBrowser",
-        "bedrock-agentcore:ListBrowsers",
-        "bedrock-agentcore:GetBrowser",
-        "bedrock-agentcore:DeleteBrowser",
-        "bedrock-agentcore:StartBrowserSession",
-        "bedrock-agentcore:StopBrowserSession",
-        "bedrock-agentcore:GetBrowserSession",
-        "bedrock-agentcore:ListBrowserSessions",
-        "bedrock-agentcore:ConnectBrowserAutomationStream",
-        "bedrock-agentcore:ConnectBrowserLiveViewStream",
-        "bedrock-agentcore:UpdateBrowserStream"
-      ],
-      "Resource": "arn:aws:bedrock-agentcore:*:*:browser/*"
-    },
-    {
-      "Sid": "CodeInterpreter",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:StartCodeInterpreterSession",
-        "bedrock-agentcore:InvokeCodeInterpreter",
-        "bedrock-agentcore:StopCodeInterpreterSession",
-        "bedrock-agentcore:GetCodeInterpreterSession",
-        "bedrock-agentcore:ListCodeInterpreterSessions"
-      ],
-      "Resource": "arn:aws:bedrock-agentcore:*:*:code-interpreter/*"
-    }
-  ]
-}
-EOF
-
-aws iam put-role-policy \
-  --role-name super-agent-agentcore-execution-role \
-  --policy-name agentcore-permissions \
-  --policy-document file:///tmp/agentcore-permissions.json
+./infra/scripts/setup-github-secrets.sh ~/Downloads/my-key.pem --repo owner/repo
 ```
 
-> S3 workspace 权限已加到 execution role 上，容器内 `restoreWorkspaceFromS3` 和 `syncWorkspaceToS3` 需要读写 workspace bucket。
-> Browser Tool 和 Code Interpreter 是 AWS 托管资源，ARN 中 region 和 account 不固定（如 `us-east-1:aws:browser/aws.browser.v1`），因此 Resource 必须用 `*:*` 通配。
+自动配置：`AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY`、`EC2_KEY_PAIR_NAME`、`EC2_SSH_PRIVATE_KEY`。
 
-### 步骤 D：创建 AgentCore Runtime
+另需手动添加（如使用 CDN）：`TEST_DOMAIN_NAME`、`TEST_HOSTED_ZONE_ID`。
+
+### Pipeline 流程
+
+1. **Build & Test** — 编译前后端 + 运行测试
+2. **CDK Deploy** — 部署/更新测试 Stack（`SuperAgentTest`）
+3. **Deploy Application** — 通过 SSM 部署代码到 EC2
+4. **Smoke Test** — 健康检查 + 前端可达性验证
+
+## LiteLLM 模型网关（可选）
+
+部署完成后，如需接入第三方模型（Kimi K2.5、GLM 5.1 等），SSH 到 EC2 执行：
 
 ```bash
-aws bedrock-agentcore-control create-agent-runtime \
-  --agent-runtime-name superAgentRuntime \
-  --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"<ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/super-agent-agentcore:latest"}}' \
-  --role-arn "arn:aws:iam::<ACCOUNT_ID>:role/super-agent-agentcore-execution-role" \
-  --network-configuration '{"networkMode":"PUBLIC"}' \
-  --environment-variables '{
-    "CLAUDE_CODE_USE_BEDROCK":"1",
-    "ANTHROPIC_MODEL":"us.anthropic.claude-opus-4-6-v1",
-    "AWS_ACCESS_KEY_ID":"<your-bedrock-access-key>",
-    "AWS_SECRET_ACCESS_KEY":"<your-bedrock-secret-key>",
-    "AWS_REGION":"us-west-2",
-    "WORKSPACE_S3_REGION":"us-east-1"
-  }' \
-  --description "Super Agent AgentCore Runtime" \
-  --region us-west-2
+sudo bash /path/to/infra/scripts/setup-litellm.sh
 ```
 
-> 踩坑提醒：
-> - Runtime 名称只允许 `[a-zA-Z][a-zA-Z0-9_]{0,47}`，不能有连字符
-> - 如果 Bedrock 模型在另一个账号，通过 `--environment-variables` 注入那个账号的 AK/SK
-> - 如果 Bedrock 在同一个账号，可以不传 AK/SK，让 Execution Role 直接调用
+然后编辑 `/opt/litellm/.env` 填入 API Key，重启 `sudo systemctl restart litellm`。
 
-记下输出中的 `agentRuntimeArn`，下一步要用。
+访问 `https://your-domain/modelservice/ui/` 管理模型。
 
-等待 Runtime 就绪：
+## 运维
 
-```bash
-aws bedrock-agentcore-control get-agent-runtime \
-  --agent-runtime-id <runtime-id> \
-  --region us-west-2 \
-  --query 'status' --output text
-# 等到输出 READY
-```
-
-### 步骤 E：更新 EC2 .env 启用 AgentCore
-
-准备一个 override 文件：
+### 查看日志
 
 ```bash
-cat > agentcore-overrides.env << EOF
-AGENT_RUNTIME=agentcore
-AGENTCORE_RUNTIME_ARN=<步骤 D 输出的 agentRuntimeArn>
-AGENTCORE_EXECUTION_ROLE_ARN=arn:aws:iam::<ACCOUNT_ID>:role/super-agent-agentcore-execution-role
-AGENTCORE_WORKSPACE_S3_BUCKET=super-agent-workspaces-<ACCOUNT_ID>
-EOF
-```
-
-然后重新部署（只更新 .env，跳过前端）：
-
-```bash
-./scripts/deploy.sh ~/Downloads/my-key.pem --stack SuperAgentTest \
-  --env-file ./agentcore-overrides.env --skip-frontend
-```
-
-或者直接 SSH 上去改 `.env` 然后重启：
-
-```bash
-# 通过 SSM
+# 通过 SSM 连接
 aws ssm start-session --target <InstanceId> --region us-west-2
 
-# 在 EC2 上
-sudo -u ubuntu vi /opt/super-agent/.env
-# 添加上面四行
-sudo systemctl restart backend
+# 后端日志
+tail -f /opt/super-agent/logs/backend.log
+tail -f /opt/super-agent/logs/backend-error.log
+
+# Nginx 日志
+tail -f /var/log/nginx/access.log
+tail -f /var/log/nginx/error.log
 ```
 
-> 注意：systemd service 的 `EnvironmentFile` 指向 `/opt/super-agent/.env`，不是 `/opt/super-agent/backend/.env`。
-> 后端代码也会通过 dotenv 加载 `backend/.env`，但 dotenv 不覆盖已存在的环境变量，
-> 所以 systemd 注入的值优先。手动修改时务必改 `/opt/super-agent/.env`。
+日志也会自动推送到 CloudWatch Logs（`/super-agent/backend`、`/super-agent/nginx-*`）。
 
-### 步骤 F：验证
-
-在网页上发一条消息，检查：
-- 聊天正常回复
-- 右侧 Workspace 面板显示文件（不是空的）
-
-如果 Workspace 面板空，检查 `/opt/super-agent/logs/backend-error.log`，
-常见原因是 EC2 instance role 缺少 workspace S3 bucket 的 `s3:ListBucket` 权限
-（infra CDK stack 已自动授权，不应出现此问题）。
-
----
-
-## 第三部分：回退
-
-### AgentCore → Claude 模式
+### 重启服务
 
 ```bash
-# SSH 到 EC2
+sudo systemctl restart backend
+sudo systemctl status backend
+```
+
+### 环境变量
+
+生产环境变量在 `/opt/super-agent/.env`（systemd EnvironmentFile）。
+`deploy.sh` 的合并策略是"已有值不覆盖"，手动添加的变量不会被后续部署覆盖。
+
+### AgentCore ↔ Claude 模式切换
+
+```bash
+# 切换到 Claude 模式（EC2 子进程）
 sed -i 's/^AGENT_RUNTIME=agentcore/AGENT_RUNTIME=claude/' /opt/super-agent/.env
+sudo systemctl restart backend
+
+# 切回 AgentCore 模式
+sed -i 's/^AGENT_RUNTIME=claude/AGENT_RUNTIME=agentcore/' /opt/super-agent/.env
 sudo systemctl restart backend
 ```
 
-### 更新 AgentCore 容器代码
+### 更新 AgentCore 容器
 
 ```bash
 cd agentcore
@@ -323,39 +216,41 @@ docker buildx build --platform linux/arm64 \
   --load .
 docker push <ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/super-agent-agentcore:latest
 
-# 通知 AgentCore 拉取新镜像
-# ⚠️ 必须传完整的 --environment-variables，否则 AWS 会清空已有环境变量
+# 通知 AgentCore 拉取新镜像（⚠️ --environment-variables 是全量替换，必须传完整）
 aws bedrock-agentcore-control update-agent-runtime \
   --agent-runtime-id <runtime-id> \
-  --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"<ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/super-agent-agentcore:latest"}}' \
+  --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"<ECR_URI>:latest"}}' \
   --role-arn "arn:aws:iam::<ACCOUNT_ID>:role/super-agent-agentcore-execution-role" \
   --network-configuration '{"networkMode":"PUBLIC"}' \
-  --environment-variables '{
-    "CLAUDE_CODE_USE_BEDROCK":"1",
-    "ANTHROPIC_MODEL":"us.anthropic.claude-opus-4-6-v1",
-    "AWS_REGION":"us-west-2",
-    "WORKSPACE_S3_REGION":"us-east-1"
-  }' \
+  --environment-variables '{"CLAUDE_CODE_USE_BEDROCK":"1","ANTHROPIC_MODEL":"us.anthropic.claude-opus-4-6-v1","AWS_REGION":"us-west-2","WORKSPACE_S3_REGION":"us-west-2"}' \
   --region us-west-2
 ```
 
-> ⚠️ `--environment-variables` 是全量替换，不是增量更新。每次 update 都必须传完整的环境变量集合，漏传的变量会被清空。如果 Bedrock 使用跨账号 AK/SK，也要一并传入。
-
-### 更换 Bedrock 模型或轮换 AK/SK
-
-同上 `update-agent-runtime`，修改 `--environment-variables` 中的值。
-
-### 销毁整个环境
+## 销毁环境
 
 ```bash
 cd infra
-npx cdk destroy -c stackName=SuperAgentTest --region us-west-2
+npx cdk destroy -c stackName=SuperAgentProd --region us-west-2 --force
 ```
 
-> AgentCore Runtime、ECR 仓库、IAM execution role 不在 CDK 管理范围内，需要手动删除：
-> ```bash
-> aws bedrock-agentcore-control delete-agent-runtime --agent-runtime-id <id> --region us-west-2
-> aws ecr delete-repository --repository-name super-agent-agentcore --force --region us-west-2
-> aws iam delete-role-policy --role-name super-agent-agentcore-execution-role --policy-name agentcore-permissions
-> aws iam delete-role --role-name super-agent-agentcore-execution-role
-> ```
+CDK destroy 后需要手动清理：
+
+```bash
+# Avatar 和 Skills 桶（removalPolicy=RETAIN，CDK 不删）
+aws s3 rb s3://<avatar-bucket-name> --force
+aws s3 rb s3://<skills-bucket-name> --force
+
+# AgentCore 资源（不在 CDK 管理范围）
+aws bedrock-agentcore-control delete-agent-runtime --agent-runtime-id <id> --region us-west-2
+aws ecr delete-repository --repository-name super-agent-agentcore --force --region us-west-2
+aws iam delete-role-policy --role-name super-agent-agentcore-execution-role --policy-name agentcore-permissions
+aws iam delete-role --role-name super-agent-agentcore-execution-role
+```
+
+## 已知注意事项
+
+- **EC2 UserData 耗时**：首次创建 EC2 约需 3-5 分钟完成 bootstrap，`deploy-full.sh` 会自动等待
+- **CloudFront Origin 占位符**：CDK 创建时 EC2 IP 未知，使用占位符域名；`deploy-full.sh` 会在 Phase 1 后自动替换为实际 EC2 公网 DNS
+- **`DnsValidatedCertificate` 废弃警告**：CDK 会输出 deprecation warning，功能正常，未来版本需迁移到 `acm.Certificate`
+- **npm ci fallback**：如果 `package-lock.json` 与 `package.json` 不同步，部署脚本会自动 fallback 到 `npm install`
+- **S3 桶 RETAIN 策略**：Avatar 和 Skills 桶设为 RETAIN，CDK destroy 不会删除，需手动清理
