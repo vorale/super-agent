@@ -243,8 +243,8 @@ aws s3 rb s3://<skills-bucket-name> --force
 # AgentCore 资源（不在 CDK 管理范围）
 aws bedrock-agentcore-control delete-agent-runtime --agent-runtime-id <id> --region us-west-2
 aws ecr delete-repository --repository-name super-agent-agentcore --force --region us-west-2
-aws iam delete-role-policy --role-name super-agent-agentcore-execution-role --policy-name agentcore-permissions
-aws iam delete-role --role-name super-agent-agentcore-execution-role
+aws iam delete-role-policy --role-name super-agent-agentcore-role-<StackName> --policy-name agentcore-permissions-<StackName>
+aws iam delete-role --role-name super-agent-agentcore-role-<StackName>
 ```
 
 ## 已知注意事项
