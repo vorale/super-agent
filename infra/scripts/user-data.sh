@@ -209,7 +209,11 @@ systemctl daemon-reload
 cat > /opt/super-agent/fetch-db-url.sh << 'FETCHSCRIPT'
 #!/bin/bash
 SECRET_ARN="${1:?Usage: fetch-db-url.sh <SECRET_ARN>}"
-REGION="${AWS_REGION:-us-west-2}"
+# Extract region from ARN (4th field: arn:aws:secretsmanager:<region>:...)
+REGION=$(echo "$SECRET_ARN" | cut -d: -f4)
+if [ -z "$REGION" ]; then
+  REGION="${AWS_REGION:-us-west-2}"
+fi
 SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region "$REGION" --query SecretString --output text)
 DB_USER=$(echo "$SECRET_JSON" | jq -r '.username')
 DB_PASS=$(echo "$SECRET_JSON" | jq -r '.password')
