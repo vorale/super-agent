@@ -139,6 +139,10 @@ export const translations: TranslationData = {
     en: 'Active',
     cn: '活跃'
   },
+  'status.idle': {
+    en: 'Idle',
+    cn: '空闲'
+  },
   'status.busy': {
     en: 'Busy',
     cn: '忙碌'

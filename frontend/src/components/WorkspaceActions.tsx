@@ -60,7 +60,7 @@ export function WorkspaceActions({ sessionId, refreshKey }: WorkspaceActionsProp
     setDismissed(false)
 
     restClient.get<{ apps: DetectedApp[] }>(`/api/chat/sessions/${sessionId}/workspace/detect-apps`)
-      .then(res => setApps(res.apps))
+      .then(res => setApps(Array.isArray(res?.apps) ? res.apps : []))
       .catch(() => setApps([]))
   }, [sessionId, refreshKey])
 
@@ -122,7 +122,7 @@ export function WorkspaceActions({ sessionId, refreshKey }: WorkspaceActionsProp
 
       // Refresh app list to pick up new published/preview state
       restClient.get<{ apps: DetectedApp[] }>(`/api/chat/sessions/${sessionId}/workspace/detect-apps`)
-        .then(r => setApps(r.apps))
+        .then(r => setApps(Array.isArray(r?.apps) ? r.apps : []))
         .catch(() => {})
 
       return res

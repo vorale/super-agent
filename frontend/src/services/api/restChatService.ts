@@ -269,6 +269,10 @@ export const RestChatService = {
       const response = await restClient.get<ApiChatMessage[]>(
         `/api/chat/history/${validSessionId}`
       );
+      if (!Array.isArray(response)) {
+        console.warn('[getHistory] Expected array, got:', typeof response, response);
+        return [];
+      }
       return response.map(mapApiMessageToMessage);
     } catch (error) {
       // Return empty array if session not found
@@ -368,6 +372,10 @@ export const RestChatService = {
     try {
       const qs = businessScopeId ? `?business_scope_id=${businessScopeId}` : '';
       const response = await restClient.get<ApiChatSession[]>(`/api/chat/sessions${qs}`);
+      if (!Array.isArray(response)) {
+        console.warn('[getSessions] Expected array, got:', typeof response, response);
+        return [];
+      }
       return response;
     } catch (error) {
       if (error instanceof ServiceError) throw error;
@@ -383,6 +391,10 @@ export const RestChatService = {
       const response = await restClient.get<ApiChatMessage[]>(
         `/api/chat/history/${sessionId}`
       );
+      if (!Array.isArray(response)) {
+        console.warn('[getSessionHistory] Expected array, got:', typeof response, response);
+        return [];
+      }
       return response.map(mapApiMessageToMessage);
     } catch (error) {
       console.warn('Failed to fetch session history:', error);

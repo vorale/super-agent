@@ -68,10 +68,10 @@ function AppContent() {
 
 function App() {
   return (
-    <ErrorBoundary>
-      <ThemeProvider>
-        <BrowserRouter>
-          <TranslationProvider>
+    <ThemeProvider>
+      <BrowserRouter>
+        <TranslationProvider>
+          <ErrorBoundary>
             <ToastProvider>
               <AuthProvider>
                 <Routes>
@@ -86,10 +86,10 @@ function App() {
                 </Routes>
               </AuthProvider>
             </ToastProvider>
-          </TranslationProvider>
-        </BrowserRouter>
-      </ThemeProvider>
-    </ErrorBoundary>
+          </ErrorBoundary>
+        </TranslationProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }
 

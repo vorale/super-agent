@@ -92,7 +92,7 @@ export function ContextPanel({ context, isLoading = false }: ContextPanelProps) 
     <div className="w-72 bg-gray-900 border-l border-gray-800 p-4 overflow-y-auto">
       <div className="space-y-6">
         {/* Memories Section */}
-        {context.memories.length > 0 && (
+        {(context.memories?.length ?? 0) > 0 && (
           <div>
             <SectionHeader icon={Brain} title={t('chat.memories')} />
             <div className="space-y-2">
@@ -104,7 +104,7 @@ export function ContextPanel({ context, isLoading = false }: ContextPanelProps) 
         )}
 
         {/* Use Cases Section */}
-        {context.useCases.length > 0 && (
+        {(context.useCases?.length ?? 0) > 0 && (
           <div>
             <SectionHeader icon={Lightbulb} title={t('chat.useCases')} />
             <div className="space-y-2">
@@ -120,7 +120,7 @@ export function ContextPanel({ context, isLoading = false }: ContextPanelProps) 
         )}
 
         {/* Related Links Section */}
-        {context.relatedLinks.length > 0 && (
+        {(context.relatedLinks?.length ?? 0) > 0 && (
           <div>
             <SectionHeader icon={Link2} title={t('chat.relatedLinks')} />
             <div className="space-y-2">
