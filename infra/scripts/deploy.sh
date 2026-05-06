@@ -359,6 +359,7 @@ if [ "$SKIP_BACKEND" = false ]; then
   echo ""
   echo "=== Building backend locally ==="
   cd "$PROJECT_ROOT/backend"
+  npm install
   npx tsc --noUnusedLocals false --noUnusedParameters false --strict false --noImplicitAny false --strictNullChecks false 2>&1 || true
   [ ! -f dist/index.js ] && echo "ERROR: local tsc failed, dist/index.js not found" && exit 1
 
