@@ -12,6 +12,9 @@ def main():
     p.add_argument('--workspace-bucket', required=True)
     p.add_argument('--app-url', required=True)
     p.add_argument('--database-url', required=True)
+    p.add_argument('--bedrock-api-key', default='',
+                   help='Optional Bedrock API Key (bearer token). '
+                        'Takes priority over AWS_ACCESS_KEY_ID/SECRET for Bedrock calls.')
     p.add_argument('--output', required=True)
     args = p.parse_args()
 
@@ -37,6 +40,9 @@ def main():
         f'AGENTCORE_WORKSPACE_S3_BUCKET={args.workspace_bucket}',
         f'DATABASE_URL={args.database_url}',
     ]
+
+    if args.bedrock_api_key:
+        lines.append(f'BEDROCK_API_KEY={args.bedrock_api_key}')
 
     with open(args.output, 'w') as f:
         f.write('\n'.join(lines) + '\n')

@@ -26,6 +26,7 @@ export AWS_PAGER=""
 #   --hosted-zone-id <id>   Route53 hosted zone ID
 #   --bedrock-ak <key>      Bedrock AWS Access Key (cross-account, optional)
 #   --bedrock-sk <secret>   Bedrock AWS Secret Key (cross-account, optional)
+#   --bedrock-api-key <key> Bedrock API Key / bearer token (preferred, overrides AK/SK)
 #   --skip-cdk              Skip CDK deploy (reuse existing stack)
 #   --skip-agentcore        Skip AgentCore setup
 #   --skip-frontend         Skip frontend build/sync
@@ -52,6 +53,7 @@ DOMAIN_NAME=""
 HOSTED_ZONE_ID=""
 BEDROCK_AK=""
 BEDROCK_SK=""
+BEDROCK_API_KEY="${BEDROCK_API_KEY:-}"
 SKIP_CDK=false
 SKIP_AGENTCORE=false
 SKIP_FRONTEND=false
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --hosted-zone-id)   HOSTED_ZONE_ID="$2"; shift 2 ;;
     --bedrock-ak)       BEDROCK_AK="$2"; shift 2 ;;
     --bedrock-sk)       BEDROCK_SK="$2"; shift 2 ;;
+    --bedrock-api-key)  BEDROCK_API_KEY="$2"; shift 2 ;;
     --skip-cdk)         SKIP_CDK=true; shift ;;
     --skip-agentcore)   SKIP_AGENTCORE=true; shift ;;
     --skip-frontend)    SKIP_FRONTEND=true; shift ;;
@@ -197,6 +200,10 @@ echo "=== Phase 2: Code Deploy (deploy.sh) ==="
 DEPLOY_ARGS="$SSH_KEY --stack $STACK_NAME --region $REGION"
 [ "$SKIP_FRONTEND" = true ] && DEPLOY_ARGS="$DEPLOY_ARGS --skip-frontend"
 [ "$SKIP_BACKEND" = true ] && DEPLOY_ARGS="$DEPLOY_ARGS --skip-backend"
+# Propagate Bedrock credentials so deploy.sh writes them into the backend .env.
+# Without these, BEDROCK_API_KEY would only reach the AgentCore container (Phase 3)
+# and never make it to the backend process on EC2.
+[ -n "$BEDROCK_API_KEY" ] && DEPLOY_ARGS="$DEPLOY_ARGS --bedrock-api-key $BEDROCK_API_KEY"
 
 "$SCRIPT_DIR/deploy.sh" $DEPLOY_ARGS
 
@@ -330,9 +337,12 @@ if [ "$SKIP_AGENTCORE" = false ]; then
   echo "  [3d] Creating/updating AgentCore Runtime..."
   ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/$ROLE_NAME"
 
-  # Build environment variables JSON
+  # Build environment variables JSON.
+  # Priority: BEDROCK_API_KEY (bearer token) > BEDROCK_AK/SK (SigV4) > execution role.
   ENV_VARS="{\"CLAUDE_CODE_USE_BEDROCK\":\"1\",\"ANTHROPIC_MODEL\":\"us.anthropic.claude-opus-4-6-v1\",\"AWS_REGION\":\"$REGION\",\"WORKSPACE_S3_REGION\":\"$REGION\""
-  if [ -n "$BEDROCK_AK" ] && [ -n "$BEDROCK_SK" ]; then
+  if [ -n "$BEDROCK_API_KEY" ]; then
+    ENV_VARS="$ENV_VARS,\"AWS_BEARER_TOKEN_BEDROCK\":\"$BEDROCK_API_KEY\",\"BEDROCK_API_KEY\":\"$BEDROCK_API_KEY\",\"AWS_AUTH_SCHEME_PREFERENCE\":\"httpBearerAuth\""
+  elif [ -n "$BEDROCK_AK" ] && [ -n "$BEDROCK_SK" ]; then
     ENV_VARS="$ENV_VARS,\"AWS_ACCESS_KEY_ID\":\"$BEDROCK_AK\",\"AWS_SECRET_ACCESS_KEY\":\"$BEDROCK_SK\""
   fi
   ENV_VARS="$ENV_VARS}"

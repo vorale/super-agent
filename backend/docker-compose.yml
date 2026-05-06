@@ -109,6 +109,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLAUDE_CODE_USE_BEDROCK: ${CLAUDE_CODE_USE_BEDROCK:-false}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-4-5-20250929}
+      # Bedrock API Key (preferred over AWS_ACCESS_KEY_ID/SECRET for Bedrock calls).
+      BEDROCK_API_KEY: ${BEDROCK_API_KEY:-}
       AGENT_WORKSPACE_BASE_DIR: /app/workspaces
     ports:
       - "3000:3000"

@@ -19,6 +19,7 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import { Queue, Worker, type Job } from 'bullmq';
 import { config } from '../config/index.js';
+import { createBedrockClient } from './bedrock-client.js';
 import { redisConnection } from '../config/queue.js';
 import { scopeMemoryRepository } from '../repositories/scope-memory.repository.js';
 import { redisService } from './redis.service.js';
@@ -28,7 +29,7 @@ const DISTILLATION_MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 const QUEUE_NAME = 'distillation';
 const CURSOR_PREFIX = 'distill:cursor:'; // Redis key: distill:cursor:{scopeId}
 
-const bedrockClient = new BedrockRuntimeClient({ region: config.aws.region });
+const bedrockClient: BedrockRuntimeClient = createBedrockClient({ region: config.aws.region });
 
 // ---------------------------------------------------------------------------
 // Types

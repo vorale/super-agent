@@ -215,6 +215,93 @@ describe('Property 12: Credential validation', () => {
       { numRuns: 100 },
     );
   });
+
+  // -----------------------------------------------------------------------
+  // Bedrock API Key path
+  // -----------------------------------------------------------------------
+
+  it('should PASS when Bedrock is enabled with a valid BEDROCK_API_KEY and AWS_REGION', () => {
+    fc.assert(
+      fc.property(
+        nonEmptyNonWhitespaceString,
+        nonEmptyNonWhitespaceString,
+        (apiKey, region) => {
+          const config: ClaudeCredentialConfig = {
+            claudeCodeUseBedrock: 'true',
+            bedrockApiKey: apiKey,
+            awsRegion: region,
+          };
+          const result = validateClaudeCredentials(config);
+          expect(result.valid).toBe(true);
+          expect(result.error).toBeUndefined();
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('should PASS with BEDROCK_API_KEY even when AK/SK are missing or empty', () => {
+    fc.assert(
+      fc.property(
+        nonEmptyNonWhitespaceString,
+        nonEmptyNonWhitespaceString,
+        fc.option(emptyOrWhitespaceString, { nil: undefined }),
+        fc.option(emptyOrWhitespaceString, { nil: undefined }),
+        (apiKey, region, accessKeyId, secretAccessKey) => {
+          const config: ClaudeCredentialConfig = {
+            claudeCodeUseBedrock: 'true',
+            bedrockApiKey: apiKey,
+            awsAccessKeyId: accessKeyId,
+            awsSecretAccessKey: secretAccessKey,
+            awsRegion: region,
+          };
+          const result = validateClaudeCredentials(config);
+          expect(result.valid).toBe(true);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('should FAIL when BEDROCK_API_KEY is set but AWS_REGION is missing or empty', () => {
+    fc.assert(
+      fc.property(
+        nonEmptyNonWhitespaceString,
+        fc.oneof(emptyOrWhitespaceString, fc.constant(undefined)),
+        (apiKey, region) => {
+          const config: ClaudeCredentialConfig = {
+            claudeCodeUseBedrock: 'true',
+            bedrockApiKey: apiKey,
+            awsRegion: region,
+          };
+          const result = validateClaudeCredentials(config);
+          expect(result.valid).toBe(false);
+          expect(result.error).toBeDefined();
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('should FAIL when BEDROCK_API_KEY is empty/whitespace even with valid region', () => {
+    fc.assert(
+      fc.property(
+        emptyOrWhitespaceString,
+        nonEmptyNonWhitespaceString,
+        (apiKey, region) => {
+          const config: ClaudeCredentialConfig = {
+            claudeCodeUseBedrock: 'true',
+            bedrockApiKey: apiKey,
+            awsRegion: region,
+          };
+          const result = validateClaudeCredentials(config);
+          // Should FAIL unless AK/SK fall back and are valid (they aren't here)
+          expect(result.valid).toBe(false);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

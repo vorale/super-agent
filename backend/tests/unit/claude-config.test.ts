@@ -165,5 +165,70 @@ describe('claude-config', () => {
       expect(result.error).toContain('AWS_SECRET_ACCESS_KEY');
       expect(result.error).toContain('AWS_REGION');
     });
+
+    // --------- Bedrock API Key path ---------
+
+    it('should pass with Bedrock API Key + AWS_REGION (no AK/SK needed)', () => {
+      const config: ClaudeCredentialConfig = {
+        claudeCodeUseBedrock: 'true',
+        bedrockApiKey: 'ABSKQmVkcm9ja0FQSUtleS1kZW1v',
+        awsRegion: 'us-east-1',
+      };
+      const result = validateClaudeCredentials(config);
+      expect(result.valid).toBe(true);
+      expect(result.error).toBeUndefined();
+    });
+
+    it('should pass with Bedrock API Key + AWS_REGION even when AK/SK are empty', () => {
+      const config: ClaudeCredentialConfig = {
+        claudeCodeUseBedrock: 'true',
+        bedrockApiKey: 'ABSKQmVkcm9ja0FQSUtleS1kZW1v',
+        awsAccessKeyId: '',
+        awsSecretAccessKey: '',
+        awsRegion: 'us-east-1',
+      };
+      const result = validateClaudeCredentials(config);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should pass with Bedrock API Key when CLAUDE_CODE_USE_BEDROCK="1"', () => {
+      const config: ClaudeCredentialConfig = {
+        claudeCodeUseBedrock: '1',
+        bedrockApiKey: 'ABSKQmVkcm9ja0FQSUtleS1kZW1v',
+        awsRegion: 'us-west-2',
+      };
+      const result = validateClaudeCredentials(config);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should fail when Bedrock API Key is set but AWS_REGION is missing', () => {
+      const config: ClaudeCredentialConfig = {
+        claudeCodeUseBedrock: 'true',
+        bedrockApiKey: 'ABSKQmVkcm9ja0FQSUtleS1kZW1v',
+      };
+      const result = validateClaudeCredentials(config);
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('AWS_REGION');
+    });
+
+    it('should fail when Bedrock API Key is whitespace-only', () => {
+      const config: ClaudeCredentialConfig = {
+        claudeCodeUseBedrock: 'true',
+        bedrockApiKey: '   ',
+        awsRegion: 'us-east-1',
+      };
+      const result = validateClaudeCredentials(config);
+      expect(result.valid).toBe(false);
+    });
+
+    it('should fail when CLAUDE_CODE_USE_BEDROCK is not enabled even with valid API Key', () => {
+      const config: ClaudeCredentialConfig = {
+        claudeCodeUseBedrock: 'false',
+        bedrockApiKey: 'ABSKQmVkcm9ja0FQSUtleS1kZW1v',
+        awsRegion: 'us-east-1',
+      };
+      const result = validateClaudeCredentials(config);
+      expect(result.valid).toBe(false);
+    });
   });
 });

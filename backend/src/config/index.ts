@@ -71,6 +71,11 @@ const envSchema = z.object({
   // so the main process keeps using the EC2 instance role for S3/Secrets/etc.
   BEDROCK_AWS_ACCESS_KEY_ID: z.string().optional(),
   BEDROCK_AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  // Bedrock API Key (recommended). Takes priority over BEDROCK_AWS_* and AWS_* when set.
+  // The AWS SDK v3 and Claude Code CLI auto-detect AWS_BEARER_TOKEN_BEDROCK; we accept
+  // either name and propagate to downstream consumers.
+  BEDROCK_API_KEY: z.string().optional(),
+  AWS_BEARER_TOKEN_BEDROCK: z.string().optional(),
   AGENT_WORKSPACE_BASE_DIR: z.string().optional().default('/tmp/workspaces'),
   CLAUDE_CODE_EXECUTABLE: z.string().optional(),
   CLAUDE_SESSION_TIMEOUT_MS: z.string().optional().default('1800000').transform(Number), // 30 min
@@ -210,6 +215,23 @@ export const config = {
     sessionTimeoutMs: env.CLAUDE_SESSION_TIMEOUT_MS,
     responseTimeoutMs: env.CLAUDE_RESPONSE_TIMEOUT_MS,
     maxConcurrentSessions: env.CLAUDE_MAX_CONCURRENT_SESSIONS,
+  },
+
+  /**
+   * Bedrock authentication configuration.
+   *
+   * Priority:
+   *   1. `apiKey` (Bedrock API Key via AWS_BEARER_TOKEN_BEDROCK / BEDROCK_API_KEY)
+   *      — recommended. AWS SDK v3 auto-detects the env var and uses bearer auth.
+   *   2. Bedrock-specific AK/SK (BEDROCK_AWS_ACCESS_KEY_ID / BEDROCK_AWS_SECRET_ACCESS_KEY)
+   *   3. Shared AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+   *   4. Default provider chain (EC2 instance role, container role, etc.)
+   */
+  bedrock: {
+    apiKey: env.BEDROCK_API_KEY ?? env.AWS_BEARER_TOKEN_BEDROCK,
+    region: env.AWS_REGION,
+    accessKeyId: env.BEDROCK_AWS_ACCESS_KEY_ID ?? env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.BEDROCK_AWS_SECRET_ACCESS_KEY ?? env.AWS_SECRET_ACCESS_KEY,
   },
 
   docGroups: {

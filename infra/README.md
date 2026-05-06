@@ -62,8 +62,9 @@ cd /path/to/super-agent
 ```bash
 --stack <name>          # Stack 名称（默认 SuperAgent），不同 stack 完全隔离
 --region <region>       # AWS Region（默认 us-west-2）
---bedrock-ak <key>      # 跨账号 Bedrock 凭证（可选）
---bedrock-sk <secret>   # 跨账号 Bedrock 凭证（可选）
+--bedrock-api-key <key> # Bedrock API Key / Bearer Token（推荐，优先于 AK/SK）
+--bedrock-ak <key>      # 跨账号 Bedrock AK（当未提供 --bedrock-api-key 时生效）
+--bedrock-sk <secret>   # 跨账号 Bedrock SK（当未提供 --bedrock-api-key 时生效）
 --skip-cdk              # 跳过基础设施（已有 stack 时用）
 --skip-agentcore        # 跳过 AgentCore 容器部署
 --skip-frontend         # 跳过前端构建
@@ -217,6 +218,13 @@ docker buildx build --platform linux/arm64 \
 docker push <ACCOUNT_ID>.dkr.ecr.us-west-2.amazonaws.com/super-agent-agentcore:latest
 
 # 通知 AgentCore 拉取新镜像（⚠️ --environment-variables 是全量替换，必须传完整）
+# 若使用 Bedrock API Key（推荐），在下面的 JSON 中追加：
+#   "AWS_BEARER_TOKEN_BEDROCK":"<your-bedrock-api-key>"
+#   "BEDROCK_API_KEY":"<your-bedrock-api-key>"
+#   "AWS_AUTH_SCHEME_PREFERENCE":"httpBearerAuth"
+# 前两个覆盖 AWS SDK 和 Claude CLI 的不同识别路径；最后一个强制 SDK 把 bearer
+# 排到 SigV4 之前，否则容器里的 SDK 会先通过 IMDS/execution-role 拿到 SigV4
+# 凭证，直接抢先成功，API Key 会被静默忽略。
 aws bedrock-agentcore-control update-agent-runtime \
   --agent-runtime-id <runtime-id> \
   --agent-runtime-artifact '{"containerConfiguration":{"containerUri":"<ECR_URI>:latest"}}' \

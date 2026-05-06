@@ -33,6 +33,12 @@ export function getBedrockModelId(anthropicModelId: string): string {
 export interface ClaudeCredentialConfig {
   anthropicApiKey?: string;
   claudeCodeUseBedrock?: string;
+  /**
+   * Bedrock API Key (bearer token). When set together with
+   * `claudeCodeUseBedrock === 'true'` and a non-empty `awsRegion`, this
+   * alone is sufficient — no AK/SK needed.
+   */
+  bedrockApiKey?: string;
   awsAccessKeyId?: string;
   awsSecretAccessKey?: string;
   awsRegion?: string;
@@ -43,8 +49,10 @@ export interface ClaudeCredentialConfig {
  *
  * Validation passes if:
  * - ANTHROPIC_API_KEY is a non-empty string, OR
- * - CLAUDE_CODE_USE_BEDROCK is "true" AND all three AWS credentials
- *   (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION) are non-empty strings
+ * - CLAUDE_CODE_USE_BEDROCK is "true"/"1" AND ONE of the following credential
+ *   sets is complete:
+ *     a) `bedrockApiKey` is a non-empty string AND `awsRegion` is non-empty, OR
+ *     b) `awsAccessKeyId`, `awsSecretAccessKey`, and `awsRegion` are all non-empty.
  *
  * @param config - The credential configuration to validate
  * @returns An object with `valid` boolean and optional `error` message
@@ -60,14 +68,32 @@ export function validateClaudeCredentials(config: ClaudeCredentialConfig): {
 
   // Check if Bedrock credentials are present
   if (config.claudeCodeUseBedrock === 'true' || config.claudeCodeUseBedrock === '1') {
+    const hasRegion =
+      config.awsRegion !== undefined && config.awsRegion.trim().length > 0;
+    const hasBedrockApiKey =
+      config.bedrockApiKey !== undefined && config.bedrockApiKey.trim().length > 0;
+
+    // Path A: Bedrock API Key + Region
+    if (hasBedrockApiKey && hasRegion) {
+      return { valid: true };
+    }
+
     const hasAccessKeyId =
       config.awsAccessKeyId !== undefined && config.awsAccessKeyId.trim().length > 0;
     const hasSecretAccessKey =
       config.awsSecretAccessKey !== undefined && config.awsSecretAccessKey.trim().length > 0;
-    const hasRegion = config.awsRegion !== undefined && config.awsRegion.trim().length > 0;
 
+    // Path B: AK/SK/Region
     if (hasAccessKeyId && hasSecretAccessKey && hasRegion) {
       return { valid: true };
+    }
+
+    // Neither path is complete — build a helpful error message
+    if (hasBedrockApiKey && !hasRegion) {
+      return {
+        valid: false,
+        error: 'CLAUDE_CODE_USE_BEDROCK is enabled with BEDROCK_API_KEY but AWS_REGION is missing',
+      };
     }
 
     const missing: string[] = [];
@@ -77,13 +103,13 @@ export function validateClaudeCredentials(config: ClaudeCredentialConfig): {
 
     return {
       valid: false,
-      error: `CLAUDE_CODE_USE_BEDROCK is enabled but missing required AWS credentials: ${missing.join(', ')}`,
+      error: `CLAUDE_CODE_USE_BEDROCK is enabled but missing required AWS credentials: ${missing.join(', ')} (or set BEDROCK_API_KEY + AWS_REGION instead)`,
     };
   }
 
   return {
     valid: false,
     error:
-      'Either ANTHROPIC_API_KEY must be set, or CLAUDE_CODE_USE_BEDROCK must be "true" with valid AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION)',
+      'Either ANTHROPIC_API_KEY must be set, or CLAUDE_CODE_USE_BEDROCK must be "true" with valid AWS credentials (BEDROCK_API_KEY + AWS_REGION, or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_REGION)',
   };
 }

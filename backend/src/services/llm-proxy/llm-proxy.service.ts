@@ -13,6 +13,7 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/index.js';
+import { createBedrockClient } from '../bedrock-client.js';
 import { OpenAIToBedrockConverter } from './openai-to-bedrock.js';
 import { BedrockToOpenAIConverter } from './bedrock-to-openai.js';
 import { recordTokenUsage } from '../token-usage.service.js';
@@ -30,21 +31,7 @@ let bedrockClient: BedrockRuntimeClient | null = null;
 
 function getBedrockClient(): BedrockRuntimeClient {
   if (bedrockClient) return bedrockClient;
-
-  const clientConfig: Record<string, unknown> = {
-    region: config.aws.region,
-    maxAttempts: 3,
-  };
-
-  // Use Bedrock-specific credentials if available, else fall back to general AWS creds
-  const accessKeyId = config.claude.bedrockAccessKeyId ?? config.aws.accessKeyId;
-  const secretAccessKey = config.claude.bedrockSecretAccessKey ?? config.aws.secretAccessKey;
-
-  if (accessKeyId && secretAccessKey) {
-    clientConfig.credentials = { accessKeyId, secretAccessKey };
-  }
-
-  bedrockClient = new BedrockRuntimeClient(clientConfig as any);
+  bedrockClient = createBedrockClient({ region: config.aws.region, maxAttempts: 3 });
   return bedrockClient;
 }
 

@@ -1,6 +1,7 @@
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createBedrockClient, hasBedrockApiKey } from "./bedrock-client.js";
 
 export interface AvatarGenerationResult {
   role: string;
@@ -29,15 +30,17 @@ export class AvatarService {
     if (this.initialized) return;
     const region = process.env.AWS_REGION || "us-west-2";
     this.bucketName = process.env.S3_AVATARS_BUCKET || process.env.S3_BUCKET_NAME || "super-agent-avatars";
-    
+
     console.log('AvatarService initialized:', {
       region,
       bucketName: this.bucketName,
+      bedrockAuth: hasBedrockApiKey() ? 'api-key' : 'sigv4',
       hasAwsCredentials: !!(process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY)
     });
-    
-    // Nova Canvas is only available in us-east-1
-    this.bedrockClient = new BedrockRuntimeClient({ region: "us-east-1" });
+
+    // Nova Canvas is only available in us-east-1. Use shared factory so the
+    // Bedrock API Key (if configured) takes priority over AK/SK.
+    this.bedrockClient = createBedrockClient({ region: "us-east-1" });
     this.s3Client = new S3Client({ region });
     this.initialized = true;
   }

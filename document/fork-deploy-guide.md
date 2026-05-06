@@ -407,5 +407,6 @@ npx cdk destroy -c stackName=SuperAgentTest --region us-west-2
 | `APP_URL` | 推导自域名或 IP | 应用 URL |
 | `CLAUDE_CODE_USE_BEDROCK` | 固定值 `1` | 使用 Bedrock |
 | `CLAUDE_MODEL` | 固定值 | Claude 模型 ID |
+| `BEDROCK_API_KEY` | GitHub Secret（可选） | Bedrock API Key（Bearer Token）。设置后优先于 AK/SK；SDK 和 Claude CLI 均自动识别。未设置则回退到实例角色 / AK/SK。 |
 | `AUTH_MODE` | 固定值 `local` | 认证模式 |
 | `JWT_SECRET` | 自动生成（随机） | JWT 签名密钥 |

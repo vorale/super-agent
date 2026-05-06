@@ -37,18 +37,20 @@ SKIP_FRONTEND=false
 SKIP_BACKEND=false
 FRONTEND_S3_BUCKET=""
 CF_DISTRIBUTION_ID=""
+BEDROCK_API_KEY="${BEDROCK_API_KEY:-}"
 
 # Parse options
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stack)           STACK_NAME="$2"; shift 2 ;;
-    --region)          REGION="$2"; shift 2 ;;
+    --stack)            STACK_NAME="$2"; shift 2 ;;
+    --region)           REGION="$2"; shift 2 ;;
     --cognito-password) COGNITO_PASSWORD="$2"; shift 2 ;;
-    --env-file)        ENV_FILE="$2"; shift 2 ;;
-    --skip-frontend)   SKIP_FRONTEND=true; shift ;;
-    --skip-backend)    SKIP_BACKEND=true; shift ;;
-    --s3-bucket)       FRONTEND_S3_BUCKET="$2"; shift 2 ;;
-    --cf-dist-id)      CF_DISTRIBUTION_ID="$2"; shift 2 ;;
+    --env-file)         ENV_FILE="$2"; shift 2 ;;
+    --skip-frontend)    SKIP_FRONTEND=true; shift ;;
+    --skip-backend)     SKIP_BACKEND=true; shift ;;
+    --s3-bucket)        FRONTEND_S3_BUCKET="$2"; shift 2 ;;
+    --cf-dist-id)       CF_DISTRIBUTION_ID="$2"; shift 2 ;;
+    --bedrock-api-key)  BEDROCK_API_KEY="$2"; shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -220,6 +222,12 @@ AGENT_RUNTIME=claude
 AGENTCORE_WORKSPACE_S3_BUCKET=$WORKSPACE_BUCKET
 BASEEOF
 )
+
+# Inject Bedrock API Key if provided (takes priority over AK/SK).
+if [ -n "${BEDROCK_API_KEY:-}" ]; then
+  BASE_ENV="$BASE_ENV
+BEDROCK_API_KEY=$BEDROCK_API_KEY"
+fi
 
 # Add Cognito vars if applicable
 if [ "$AUTH_MODE" = "cognito" ] && [ -n "$COGNITO_USER_POOL_ID" ]; then

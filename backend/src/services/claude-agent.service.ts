@@ -15,6 +15,7 @@ import { createToken } from '../middleware/auth.js';
 import { dangerousCommandBlocker, binaryFileReadBlocker, createSkillAccessChecker } from './claude-hooks.js';
 import { WorkspaceManager, type SkillForWorkspace } from './workspace-manager.js';
 import { prisma } from '../config/database.js';
+import { buildBedrockSubprocessEnv, hasBedrockApiKey } from './bedrock-client.js';
 
 // ---------------------------------------------------------------------------
 // Re-export SDK types from @anthropic-ai/claude-agent-sdk for consumers.
@@ -432,17 +433,26 @@ export class ClaudeAgentService {
       ...(agentToken ? { AUTH_TOKEN: agentToken } : {}),
     };
 
-    // Pass Bedrock env vars to the SDK subprocess so it picks up AWS credentials
+    // Pass Bedrock env vars to the SDK subprocess so it picks up AWS credentials.
+    // Priority inside buildBedrockSubprocessEnv():
+    //   1. AWS_BEARER_TOKEN_BEDROCK (from BEDROCK_API_KEY / AWS_BEARER_TOKEN_BEDROCK)
+    //   2. Bedrock-specific AK/SK (BEDROCK_AWS_*)
+    //   3. Fallback to shared AWS_* (if unset, SDK uses default provider chain)
     if (config.claude.useBedrock) {
       options.env = {
         ...process.env,
         ...platformEnv,
         CLAUDE_CODE_USE_BEDROCK: '1',
-        AWS_REGION: config.aws.region,
-        AWS_DEFAULT_REGION: config.aws.region,
-        ...(config.claude.bedrockAccessKeyId ? { AWS_ACCESS_KEY_ID: config.claude.bedrockAccessKeyId } : {}),
-        ...(config.claude.bedrockSecretAccessKey ? { AWS_SECRET_ACCESS_KEY: config.claude.bedrockSecretAccessKey } : {}),
+        ...buildBedrockSubprocessEnv(),
       };
+      // When an API Key is in use, strip any stale AK/SK that might be in
+      // process.env — leaving them would make the AWS SDK / Claude CLI
+      // prefer SigV4 over bearer-token auth.
+      if (hasBedrockApiKey()) {
+        delete options.env.AWS_ACCESS_KEY_ID;
+        delete options.env.AWS_SECRET_ACCESS_KEY;
+        delete options.env.AWS_SESSION_TOKEN;
+      }
       // Remove any Anthropic direct-API keys/URLs so the CLI uses Bedrock auth only.
       // These may leak in from process.env or ~/.claude/settings.json.
       delete options.env.ANTHROPIC_API_KEY;

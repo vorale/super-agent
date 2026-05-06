@@ -3,11 +3,8 @@
  * Provides AI-powered agent generation and chat using AWS Bedrock Nova.
  */
 
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from '@aws-sdk/client-bedrock-runtime';
-import { config } from '../config/index.js';
+import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { createBedrockClient } from './bedrock-client.js';
 
 // Model ID for Amazon Nova 2 Lite
 const NOVA_MODEL_ID = 'us.amazon.nova-2-lite-v1:0';
@@ -63,18 +60,8 @@ export interface ChatCompletionInput {
   max_tokens?: number;
 }
 
-// Initialize Bedrock client
-const bedrockClient = new BedrockRuntimeClient({
-  region: config.aws.region,
-  ...(config.aws.accessKeyId && config.aws.secretAccessKey
-    ? {
-        credentials: {
-          accessKeyId: config.aws.accessKeyId,
-          secretAccessKey: config.aws.secretAccessKey,
-        },
-      }
-    : {}),
-});
+// Initialize Bedrock client via shared factory (applies API Key > AK/SK > default chain).
+const bedrockClient = createBedrockClient();
 
 /**
  * Generates the prompt for agent suggestion

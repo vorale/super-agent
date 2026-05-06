@@ -10,11 +10,13 @@ import {
   InvokeModelCommand,
 } from '@aws-sdk/client-bedrock-runtime';
 import { config } from '../config/index.js';
+import { createBedrockClient } from './bedrock-client.js';
 
 const MODEL_ID = 'amazon.nova-2-multimodal-embeddings-v1:0';
 const EMBEDDING_DIMENSION = 1024;
 
-const bedrockClient = new BedrockRuntimeClient({ region: config.aws.region });
+// Shared Bedrock client (API Key > AK/SK > default provider chain).
+const bedrockClient: BedrockRuntimeClient = createBedrockClient({ region: config.aws.region });
 
 export async function embedText(text: string): Promise<number[]> {
   const body = {
